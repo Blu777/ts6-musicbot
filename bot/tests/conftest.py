@@ -1,7 +1,10 @@
-import pytest
+import sys
 import os
+import pathlib
 
-# Make bot/ the import root for all tests
+# Put bot/ on sys.path so tests can import ts6, audio, commands directly
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+
 os.environ.setdefault("TS_WEBQUERY_HOST", "localhost")
 os.environ.setdefault("TS_WEBQUERY_PORT", "10081")
 os.environ.setdefault("TS_WEBQUERY_APIKEY", "test-key")

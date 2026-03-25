@@ -3,3 +3,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 audio_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+teamspeak-client.tar.gz
