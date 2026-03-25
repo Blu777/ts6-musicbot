@@ -10,19 +10,24 @@ XVFB_PID=$!
 sleep 1
 
 echo "[entrypoint] Starting PulseAudio..."
-# In Docker as root: system mode requires the socket dir to exist
-mkdir -p /var/run/pulse
-# Start in foreground as background process (avoids daemonize issues in Docker)
-pulseaudio --system --disallow-exit --exit-idle-time=-1 --log-target=stderr &
+# Run with explicit socket so pactl and the TS6 client know where to connect.
+# Use -n + manual module load to avoid system.pa config issues in Docker as root.
+PULSE_SOCKET=/tmp/pulse/native
+mkdir -p /tmp/pulse
+pulseaudio -n \
+    --exit-idle-time=-1 \
+    --daemonize=no \
+    --log-target=stderr \
+    --load="module-native-protocol-unix socket=${PULSE_SOCKET} auth-anonymous=1" \
+    --load="module-null-sink sink_name=musicbot_sink sink_properties=device.description=MusicBot_Virtual_Sink" \
+    --load="module-virtual-source source_name=musicbot_sink.mic master=musicbot_sink.monitor" &
 PULSE_PID=$!
+export PULSE_SERVER="unix:${PULSE_SOCKET}"
 sleep 2
-# Verify it started
 if ! kill -0 $PULSE_PID 2>/dev/null; then
     echo "[entrypoint] WARNING: PulseAudio failed to start — audio will not work"
 fi
-
-echo "[entrypoint] Setting up virtual audio..."
-/app/scripts/setup_audio.sh
+echo "[entrypoint] PulseAudio socket: ${PULSE_SOCKET}"
 
 echo "[entrypoint] Launching TS6 client..."
 /app/scripts/launch_ts6.sh &
