@@ -21,12 +21,14 @@ class AudioPlayer:
         self._current_process: subprocess.Popen | None = None
         self._playing = False
         self.volume = int(os.getenv("AUDIO_VOLUME", "85"))
+        self._loop_task: asyncio.Task | None = None
+        self._current_track: dict | None = None
 
     async def enqueue(self, track: dict) -> int:
         """Add track to queue. Returns queue position (1-indexed). Starts playback if idle."""
         self.queue.append(track)
         if not self._playing:
-            asyncio.create_task(self._play_loop())
+            self._loop_task = asyncio.create_task(self._play_loop())
         return len(self.queue)
 
     async def skip(self) -> None:
@@ -42,10 +44,13 @@ class AudioPlayer:
 
     async def set_volume(self, vol: int) -> None:
         self.volume = max(0, min(100, vol))
-        os.system(f"pactl set-sink-volume {PULSE_SINK} {self.volume}%")
+        subprocess.run(
+            ["pactl", "set-sink-volume", PULSE_SINK, f"{self.volume}%"],
+            check=False,
+        )
 
     def current_track(self) -> dict | None:
-        return self._current_track if hasattr(self, "_current_track") else None
+        return self._current_track
 
     async def _play_loop(self) -> None:
         self._playing = True
