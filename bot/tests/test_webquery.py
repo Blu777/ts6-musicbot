@@ -1,5 +1,4 @@
 import pytest
-import pytest_asyncio
 from aioresponses import aioresponses
 from ts6.webquery import WebQueryClient
 
