@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  ts6-musicbot:
+    build: .
+    container_name: ts6-musicbot
+    restart: unless-stopped
+
+    env_file: .env
+
+    environment:
+      - DISPLAY=:99
+
+    volumes:
+      - ts6_identity:/root/.config/TeamSpeak
+      - audio_cache:/tmp/audio_cache
+
+    devices:
+      - /dev/snd:/dev/snd
+
+    cap_add:
+      - SYS_ADMIN
+
+    healthcheck:
+      test: ["CMD", "python3", "bot/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  ts6_identity:
+  audio_cache:
