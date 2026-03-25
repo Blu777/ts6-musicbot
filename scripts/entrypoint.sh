@@ -10,9 +10,16 @@ XVFB_PID=$!
 sleep 1
 
 echo "[entrypoint] Starting PulseAudio..."
-# --system is required when running as root inside Docker
-pulseaudio --system --daemonize=yes --exit-idle-time=-1 --log-target=syslog
-sleep 1
+# In Docker as root: system mode requires the socket dir to exist
+mkdir -p /var/run/pulse
+# Start in foreground as background process (avoids daemonize issues in Docker)
+pulseaudio --system --disallow-exit --exit-idle-time=-1 --log-target=stderr &
+PULSE_PID=$!
+sleep 2
+# Verify it started
+if ! kill -0 $PULSE_PID 2>/dev/null; then
+    echo "[entrypoint] WARNING: PulseAudio failed to start — audio will not work"
+fi
 
 echo "[entrypoint] Setting up virtual audio..."
 /app/scripts/setup_audio.sh
@@ -27,4 +34,4 @@ cd /app
 python3 bot/main.py
 
 # Cleanup
-kill $XVFB_PID $TS6_PID 2>/dev/null || true
+kill $XVFB_PID $TS6_PID $PULSE_PID 2>/dev/null || true
