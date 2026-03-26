@@ -68,18 +68,26 @@ class AudioPlayer:
             "-reconnect", "1",
             "-reconnect_streamed", "1",
             "-reconnect_delay_max", "5",
+            "-thread_queue_size", "4096",
             "-i", track["url"],
             "-acodec", "pcm_s16le",
             "-ar", "48000",
             "-ac", "2",
             "-af", f"volume={self.volume / 100}",
             "-f", "pulse",
+            "-fragment_size", "32768",    # 32 KB PulseAudio write chunks
             PULSE_SINK,
             "-loglevel", "warning",
         ]
+        env = os.environ.copy()
+        # Ensure ffmpeg finds the PulseAudio socket even if the inherited
+        # environment doesn't carry PULSE_SERVER (e.g. under some container runtimes).
+        if "PULSE_SERVER" not in env:
+            env["PULSE_SERVER"] = "unix:/tmp/pulse/native"
+
         loop = asyncio.get_running_loop()
         self._current_process = await loop.run_in_executor(
-            None, lambda: subprocess.Popen(cmd)
+            None, lambda: subprocess.Popen(cmd, env=env)
         )
         await loop.run_in_executor(None, self._current_process.wait)
         self._current_process = None

@@ -1,8 +1,10 @@
 #!/bin/bash
 set -e
 
-# Clean up stale lock from previous runs
+# Clean up stale locks from previous runs (persist across docker restart)
 rm -f /tmp/.X99-lock
+pulseaudio --kill 2>/dev/null || true
+rm -f /run/pulse.pid /run/pulseaudio.pid /root/.config/pulse/pid 2>/dev/null || true
 
 echo "[entrypoint] Starting Xvfb on :99..."
 Xvfb :99 -screen 0 1280x720x24 &

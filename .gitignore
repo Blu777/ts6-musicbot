@@ -10,3 +10,6 @@ dist/
 build/
 .mypy_cache/
 teamspeak-client.tar.gz
+.claude/
+docs/
+TS6_MUSICBOT_SPEC.md

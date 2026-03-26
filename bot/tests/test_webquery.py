@@ -42,11 +42,23 @@ async def test_get_channels(client):
     assert result["body"][0]["channel_name"] == "TendroAudio"
 
 @pytest.mark.asyncio
-async def test_textmessagereceive(client):
-    """Tests the textmessagereceive endpoint used by ChatListener."""
+async def test_join_channel_moves_client(client):
+    """join_channel looks up the channel name and calls clientmove."""
     with aioresponses() as m:
-        m.get(f"{BASE}/1/textmessagereceive", payload={"body": []})
+        m.get(f"{BASE}/1/channellist", payload={"body": [{"channel_name": "TendroAudio", "cid": "7"}]})
+        m.get(f"{BASE}/1/whoami", payload={"body": [{"client_id": "2"}]})
+        m.post(f"{BASE}/1/clientmove", payload={"status": {"code": 0}})
         await client.start()
-        result = await client.get_text_messages()
+        ok = await client.join_channel("TendroAudio")
         await client.stop()
-    assert "body" in result
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_join_channel_returns_false_when_not_found(client):
+    with aioresponses() as m:
+        m.get(f"{BASE}/1/channellist", payload={"body": [{"channel_name": "Lobby", "cid": "1"}]})
+        await client.start()
+        ok = await client.join_channel("TendroAudio")
+        await client.stop()
+    assert ok is False

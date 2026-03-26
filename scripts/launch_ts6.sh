@@ -9,8 +9,8 @@ if [ ! -f "$TS6_BIN" ]; then
     exit 1
 fi
 
-# ts6server:// URI — same scheme as TS3
-CONNECT_URI="ts6server://${TS_SERVER_HOST}?port=${TS_SERVER_PORT:-9988}&nickname=${TS_BOT_NICKNAME:-tendroaudio}${TS_CHANNEL:+&channel=$TS_CHANNEL}${TS_SERVER_PASSWORD:+&password=$TS_SERVER_PASSWORD}"
+# TS6 client only registers ts3server:// scheme handler (confirmed from binary strings)
+CONNECT_URI="ts3server://${TS_SERVER_HOST}?port=${TS_SERVER_PORT:-9988}&nickname=${TS_BOT_NICKNAME:-tendroaudio}${TS_CHANNEL:+&channel=$TS_CHANNEL}${TS_SERVER_PASSWORD:+&password=$TS_SERVER_PASSWORD}"
 
 echo "[ts6] Connecting to: $CONNECT_URI"
 

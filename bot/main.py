@@ -35,7 +35,20 @@ async def main():
 
     listener = ChatListener(ts_client, on_message)
 
-    log.info("Bot started. Channel: %s", os.getenv("TS_CHANNEL"))
+    channel = os.getenv("TS_CHANNEL", "")
+    log.info("Bot started. Channel: %s", channel)
+
+    # Move the serverquery session into the target channel so messages route correctly
+    if channel:
+        try:
+            ok = await ts_client.join_channel(channel)
+            if ok:
+                log.info("Query session joined channel: %s", channel)
+            else:
+                log.warning("Channel not found: %s", channel)
+        except Exception as e:
+            log.warning("Could not join channel: %s", e)
+
     try:
         await ts_client.send_channel_message(
             "MusicBot connected. Type !help for commands."

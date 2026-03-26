@@ -1,4 +1,5 @@
 aiohttp>=3.9
+asyncssh>=2.14
 yt-dlp>=2024.1
 ffmpeg-python>=0.2
 pulsectl>=23.5

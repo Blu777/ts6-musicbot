@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     libgbm1 \
     libasound2t64 \
+    libnotify4 \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp (latest from GitHub, more up to date than pip)
@@ -38,6 +39,14 @@ RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp
 
 # TeamSpeak 6 client from local tar.gz
+# ── Versión verificada ────────────────────────────────────────────────────────
+# Archivo: teamspeak-client.tar.gz  (excluido del repo por tamaño, 183 MB)
+# SHA-256: b9ba408a0b58170ce32384fc8bba56800840d694bd310050cbadd09246d4bf27
+# MD5:     0464db3534303c5e32ea0aaec300ad90
+# Fecha descarga: 2025-03-25
+# Fuente:  https://teamspeak.com/en/downloads/#client  (Linux, 64-bit)
+# Extraído en /opt/ts6/ — binario principal: TeamSpeak
+# ─────────────────────────────────────────────────────────────────────────────
 COPY teamspeak-client.tar.gz /tmp/ts6client.tar.gz
 RUN mkdir -p /opt/ts6 \
     && tar -xzf /tmp/ts6client.tar.gz -C /opt/ts6 \
