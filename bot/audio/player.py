@@ -54,12 +54,26 @@ class AudioPlayer:
     def current_track(self) -> dict | None:
         return self._current_track
 
+    async def _flush_sink(self) -> None:
+        """Suspend/resume the sink to drain residual audio between tracks."""
+        env = os.environ.copy()
+        env.setdefault("PULSE_SERVER", "unix:/tmp/pulse/native")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: subprocess.run(
+            ["pactl", "suspend-sink", PULSE_SINK, "1"], env=env, check=False
+        ))
+        await asyncio.sleep(0.2)
+        await loop.run_in_executor(None, lambda: subprocess.run(
+            ["pactl", "suspend-sink", PULSE_SINK, "0"], env=env, check=False
+        ))
+
     async def _play_loop(self) -> None:
         self._playing = True
         while self.queue:
             track = self.queue.pop(0)
             self._current_track = track
             await self._play_track(track)
+            await self._flush_sink()
         self._current_track = None
         self._playing = False
 

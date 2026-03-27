@@ -33,13 +33,6 @@ if ! kill -0 $PULSE_PID 2>/dev/null; then
 fi
 echo "[entrypoint] PulseAudio socket: ${PULSE_SOCKET}"
 
-# Default sink = deaf (black hole). The TS6 client ignores settings.ini and
-# plays received voice to the PulseAudio default — this ensures it goes
-# nowhere. Only ffmpeg explicitly targets musicbot_sink.
-pactl set-default-sink musicbot_deaf
-pactl set-default-source musicbot_sink.mic
-echo "[entrypoint] Default sink: musicbot_deaf (deaf), source: musicbot_sink.mic"
-
 # Force-refresh settings.ini on every start — the persistent volume
 # may carry a stale copy from a previous build.
 cp /app/ts6_config/settings.ini /root/.config/TeamSpeak/settings.ini
