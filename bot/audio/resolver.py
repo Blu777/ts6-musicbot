@@ -4,7 +4,12 @@ Supports YouTube, SoundCloud, and any site yt-dlp handles (~1000+).
 """
 
 import asyncio
+import hashlib
+import os
+import shutil
 import yt_dlp
+
+CACHE_DIR = "/tmp/musicbot_cache"
 
 YDL_OPTS = {
     # Always pick the highest-quality audio stream available
@@ -14,6 +19,66 @@ YDL_OPTS = {
     "no_warnings": True,
     "extract_flat": False,
 }
+
+
+def clear_cache() -> None:
+    """Delete all downloaded audio files from the cache directory."""
+    if os.path.isdir(CACHE_DIR):
+        shutil.rmtree(CACHE_DIR, ignore_errors=True)
+
+
+def delete_track_file(path: str) -> None:
+    """Delete a single cached track file, ignoring errors."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+async def download_track(track: dict, progress_cb=None) -> str:
+    """Download track audio to local cache. Returns the file path.
+
+    progress_cb is an async callable(pct: int) called at ~25% intervals.
+    """
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    uid = hashlib.md5(track["webpage_url"].encode()).hexdigest()[:12]
+    out_tmpl = os.path.join(CACHE_DIR, uid + ".%(ext)s")
+
+    loop = asyncio.get_running_loop()
+    last_reported = [0]
+
+    def _hook(d):
+        if progress_cb is None:
+            return
+        if d["status"] == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+            if total:
+                pct = int(d.get("downloaded_bytes", 0) / total * 100)
+                if pct - last_reported[0] >= 25:
+                    last_reported[0] = pct
+                    asyncio.run_coroutine_threadsafe(progress_cb(pct), loop)
+        elif d["status"] == "finished":
+            asyncio.run_coroutine_threadsafe(progress_cb(100), loop)
+
+    result_holder = [None]
+
+    def _download():
+        opts = {
+            "format": "bestaudio",
+            "outtmpl": out_tmpl,
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "progress_hooks": [_hook],
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(track["webpage_url"], download=True)
+            if "entries" in info:
+                info = info["entries"][0]
+            result_holder[0] = ydl.prepare_filename(info)
+
+    await loop.run_in_executor(None, _download)
+    return result_holder[0]
 
 
 async def resolve(query: str) -> dict:

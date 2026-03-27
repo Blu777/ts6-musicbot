@@ -14,7 +14,7 @@ Commands (channel chat only):
 
 import logging
 from audio.player import AudioPlayer
-from audio.resolver import resolve
+from audio.resolver import resolve, download_track
 from ts6.webquery import WebQueryClient
 
 log = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ class CommandParser:
             "!np": self._cmd_np,
             "!vol": self._cmd_vol,
             "!move": self._cmd_move,
+            "!netstats": self._cmd_netstats,
             "!help": self._cmd_help,
         }
 
@@ -61,8 +62,22 @@ class CommandParser:
         await self.ts.send_channel_message(f"Buscando: {args}...")
         try:
             track = await resolve(args)
-            pos = await self.player.enqueue(track)
             mins, secs = divmod(track["duration"], 60)
+            await self.ts.send_channel_message(
+                f"Encontrado: {track['title']} ({mins}:{secs:02d}) — descargando..."
+            )
+
+            last_sent = [0]
+
+            async def on_progress(pct: int) -> None:
+                if pct - last_sent[0] >= 25 or pct == 100:
+                    last_sent[0] = pct
+                    await self.ts.send_channel_message(f"Descargando: {pct}%")
+
+            local_path = await download_track(track, on_progress)
+            track = {**track, "local_path": local_path}
+
+            pos = await self.player.enqueue(track)
             await self.ts.send_channel_message(
                 f"[{pos}] {track['title']} ({mins}:{secs:02d}) - pedido por {sender}"
             )
@@ -117,6 +132,30 @@ class CommandParser:
             )
         else:
             await self.ts.send_channel_message(f"Canal no encontrado: {args}")
+
+    async def _cmd_netstats(self, sender: str, _: str) -> None:
+        if not self.listener or not self.listener._session or not self.listener._chan:
+            await self.ts.send_channel_message("Stats no disponibles.")
+            return
+        try:
+            ts_clid = await self.ts.get_own_client_id()
+            resp = await self.listener._session.cmd(
+                self.listener._chan, f"clientinfo clid={ts_clid}"
+            )
+            fields = {}
+            for token in resp.split():
+                if "=" in token:
+                    k, _, v = token.partition("=")
+                    fields[k] = v
+            sent = int(fields.get("connection_packets_sent_total", 0))
+            lost = int(fields.get("connection_packets_lost_total", 0))
+            ping = fields.get("connection_ping", "?")
+            loss_pct = (lost / sent * 100) if sent else 0
+            await self.ts.send_channel_message(
+                f"Netstats — ping: {ping}ms | perdidos: {lost}/{sent} ({loss_pct:.2f}%)"
+            )
+        except Exception as e:
+            await self.ts.send_channel_message(f"Error obteniendo stats: {e}")
 
     async def _cmd_help(self, sender: str, _: str) -> None:
         await self.ts.send_channel_message(

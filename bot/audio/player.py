@@ -10,7 +10,7 @@ import subprocess
 import logging
 import os
 
-from audio.resolver import re_resolve
+from audio.resolver import re_resolve, clear_cache, delete_track_file
 
 log = logging.getLogger(__name__)
 
@@ -39,9 +39,14 @@ class AudioPlayer:
             log.info("Skipped current track.")
 
     async def stop(self) -> None:
+        for t in self.queue:
+            if t.get("local_path"):
+                delete_track_file(t["local_path"])
         self.queue.clear()
         if self._current_process:
             self._current_process.terminate()
+        if self._current_track and self._current_track.get("local_path"):
+            delete_track_file(self._current_track["local_path"])
         self._playing = False
 
     async def set_volume(self, vol: int) -> None:
@@ -73,39 +78,48 @@ class AudioPlayer:
             track = self.queue.pop(0)
             self._current_track = track
             await self._play_track(track)
+            if track.get("local_path"):
+                delete_track_file(track["local_path"])
             await self._flush_sink()
         self._current_track = None
         self._playing = False
 
     async def _play_track(self, track: dict) -> None:
-        # Re-resolve stream URL just before playback — YouTube URLs expire in ~6h.
-        # This ensures queued tracks always start with a fresh URL.
-        if track.get("webpage_url"):
-            try:
-                fresh_url = await re_resolve(track["webpage_url"])
-                track = {**track, "url": fresh_url}
-            except Exception as e:
-                log.warning("Re-resolve failed, using cached URL: %s", e)
+        local_path = track.get("local_path")
+        if local_path:
+            source = local_path
+            log.info("Playing (local): %s", track["title"])
+            extra_input_flags = []
+        else:
+            # Fallback: stream directly — re-resolve to get a fresh URL.
+            if track.get("webpage_url"):
+                try:
+                    fresh_url = await re_resolve(track["webpage_url"])
+                    track = {**track, "url": fresh_url}
+                except Exception as e:
+                    log.warning("Re-resolve failed, using cached URL: %s", e)
+            source = track["url"]
+            log.info("Playing (stream): %s", track["title"])
+            extra_input_flags = [
+                "-reconnect", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "15",
+                "-probesize", "100M",
+                "-analyzeduration", "20000000",
+                "-fflags", "+discardcorrupt",
+                "-thread_queue_size", "8192",
+            ]
 
-        log.info("Playing: %s", track["title"])
         cmd = [
             "ffmpeg",
             "-loglevel", "warning",
-            # ── Input: network stream with large buffer ──
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "15",
-            "-probesize", "100M",
-            "-analyzeduration", "20000000",     # 20 s
-            "-fflags", "+discardcorrupt",
-            "-thread_queue_size", "8192",
-            "-i", track["url"],
+            *extra_input_flags,
+            "-i", source,
             # ── Audio processing: float32 matches PulseAudio sink, SoX resampler ──
             "-acodec", "pcm_f32le",
             "-ar", "48000",
             "-ac", "2",
-            "-af", f"volume={self.volume / 100},"
-                   "aresample=resampler=soxr:precision=28:async=1000",
+            "-af", f"volume={self.volume / 100}",
             # ── PulseAudio output with 5 s target buffer ──
             "-f", "pulse",
             "-buffer_duration", "5000",
