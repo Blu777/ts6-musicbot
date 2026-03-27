@@ -76,19 +76,25 @@ class AudioPlayer:
         log.info("Playing: %s", track["title"])
         cmd = [
             "ffmpeg",
+            "-loglevel", "warning",
+            # ── Input: network stream with aggressive buffering ──
             "-reconnect", "1",
             "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "5",
+            "-reconnect_delay_max", "10",
+            "-probesize", "50M",
+            "-analyzeduration", "10000000",     # 10 s
+            "-fflags", "+discardcorrupt",
             "-thread_queue_size", "4096",
             "-i", track["url"],
+            # ── Audio processing ──
             "-acodec", "pcm_s16le",
             "-ar", "48000",
             "-ac", "2",
-            "-af", f"volume={self.volume / 100}",
+            "-af", f"volume={self.volume / 100},aresample=async=1000",
+            # ── PulseAudio output with 2 s target buffer ──
             "-f", "pulse",
-            "-fragment_size", "32768",    # 32 KB PulseAudio write chunks
+            "-buffer_duration", "2000",
             PULSE_SINK,
-            "-loglevel", "warning",
         ]
         env = os.environ.copy()
         # Ensure ffmpeg finds the PulseAudio socket even if the inherited
