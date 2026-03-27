@@ -66,6 +66,7 @@ RUN pip3 install --break-system-packages -r requirements.txt
 
 COPY bot/ ./bot/
 COPY scripts/ ./scripts/
+COPY ts6_config/ ./ts6_config/
 RUN chmod +x scripts/*.sh
 
 CMD ["./scripts/entrypoint.sh"]
