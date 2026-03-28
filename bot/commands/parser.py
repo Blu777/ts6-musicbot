@@ -147,13 +147,8 @@ class CommandParser:
                 if "=" in token:
                     k, _, v = token.partition("=")
                     fields[k] = v
-            sent = int(fields.get("connection_packets_sent_total", 0))
-            lost = int(fields.get("connection_packets_lost_total", 0))
-            ping = fields.get("connection_ping", "?")
-            loss_pct = (lost / sent * 100) if sent else 0
-            await self.ts.send_channel_message(
-                f"Netstats — ping: {ping}ms | perdidos: {lost}/{sent} ({loss_pct:.2f}%)"
-            )
+            conn_fields = {k: v for k, v in fields.items() if k.startswith("connection_")}
+            await self.ts.send_channel_message(str(conn_fields))
         except Exception as e:
             await self.ts.send_channel_message(f"Error obteniendo stats: {e}")
 
