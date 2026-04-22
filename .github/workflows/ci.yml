@@ -40,10 +40,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Create stub tarball
+        # The real teamspeak-client.tar.gz extracts files at the root of the
+        # target dir (./TeamSpeak, ./resources/, etc.), no wrapper subdir.
+        # Our stub must match that layout so the Dockerfile build succeeds.
         run: |
-          mkdir -p stub/ts6
-          echo '#!/bin/sh' > stub/ts6/TeamSpeak
-          chmod +x stub/ts6/TeamSpeak
-          tar -czf teamspeak-client.tar.gz -C stub ts6
+          mkdir -p stub
+          printf '#!/bin/sh\necho stub TS6\n' > stub/TeamSpeak
+          chmod +x stub/TeamSpeak
+          tar -czf teamspeak-client.tar.gz -C stub .
       - name: Build Docker image
         run: docker build --tag ts6-musicbot:ci .
