@@ -32,6 +32,18 @@ TS6_CONFIG_DIR="${TS6_CONFIG_DIR:-/data/ts6-config}"
 mkdir -p "$AUDIO_CACHE_DIR" "$TS6_CONFIG_DIR" /tmp/pulse /var/log/musicbot /opt/ts6
 chown -R musicbot:musicbot "$AUDIO_CACHE_DIR" "$TS6_CONFIG_DIR" /tmp/pulse /var/log/musicbot
 
+# X11 socket dir — Xvfb (running as musicbot) can't create this under /tmp
+# with euid!=0, so we pre-create it here as root.
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
+
+# PulseAudio cookie: Pulse logs warnings when the cookie file is missing.
+# Create an empty one owned by musicbot to silence the noise.
+MUSICBOT_HOME_EARLY="$(getent passwd musicbot | cut -d: -f6)"
+mkdir -p "$MUSICBOT_HOME_EARLY/.config/pulse"
+touch "$MUSICBOT_HOME_EARLY/.config/pulse/cookie"
+chown -R musicbot:musicbot "$MUSICBOT_HOME_EARLY/.config"
+
 # ── Extract TS6 client from /data if the image doesn't already include it ────
 # The proprietary binary is NOT shipped in public images. On first boot we look
 # for /data/teamspeak-client.tar.gz and extract it to /opt/ts6/.
