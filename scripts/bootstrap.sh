@@ -6,7 +6,9 @@ set -e
 echo "[bootstrap] Running as $(id)"
 
 echo "[bootstrap] Starting Xvfb on :99..."
-Xvfb :99 -screen 0 1280x720x24 &
+# Tiny resolution + 16bpp → Xvfb uses 10x less RAM and CPU. The bot has no
+# real UI interaction, so we don't need a big framebuffer.
+Xvfb :99 -screen 0 "${XVFB_SCREEN:-320x240x16}" -nolisten tcp &
 XVFB_PID=$!
 sleep 1
 
