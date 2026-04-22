@@ -14,14 +14,17 @@ echo "[bootstrap] Starting PulseAudio..."
 PULSE_SOCKET=/tmp/pulse/native
 PULSE_SINK_NAME="${PULSE_SINK_NAME:-musicbot_sink}"
 mkdir -p /tmp/pulse
+# Latency: default null-sink buffer is ~300ms, too small if the TS6 Electron
+# client has GC pauses bigger than that. Bump to 1s.
+PULSE_LATENCY_MS="${PULSE_LATENCY_MS:-1000}"
 pulseaudio -n \
     --exit-idle-time=-1 \
     --daemonize=no \
     --log-target=stderr \
     --load="module-native-protocol-unix socket=${PULSE_SOCKET} auth-anonymous=1" \
-    --load="module-null-sink sink_name=${PULSE_SINK_NAME} sink_properties=device.description=MusicBot_Virtual_Sink rate=48000 format=float32le channels=2 channel_map=front-left,front-right" \
-    --load="module-virtual-source source_name=${PULSE_SINK_NAME}.mic master=${PULSE_SINK_NAME}.monitor rate=48000 format=float32le channels=2 channel_map=front-left,front-right" \
-    --load="module-null-sink sink_name=musicbot_deaf sink_properties=device.description=MusicBot_Deaf_Sink rate=48000 format=float32le channels=2 channel_map=front-left,front-right" &
+    --load="module-null-sink sink_name=${PULSE_SINK_NAME} sink_properties=device.description=MusicBot_Virtual_Sink rate=48000 format=float32le channels=2 channel_map=front-left,front-right latency_msec=${PULSE_LATENCY_MS}" \
+    --load="module-virtual-source source_name=${PULSE_SINK_NAME}.mic master=${PULSE_SINK_NAME}.monitor rate=48000 format=float32le channels=2 channel_map=front-left,front-right latency_msec=${PULSE_LATENCY_MS}" \
+    --load="module-null-sink sink_name=musicbot_deaf sink_properties=device.description=MusicBot_Deaf_Sink rate=48000 format=float32le channels=2 channel_map=front-left,front-right latency_msec=200" &
 PULSE_PID=$!
 export PULSE_SERVER="unix:${PULSE_SOCKET}"
 export PULSE_SINK_NAME
