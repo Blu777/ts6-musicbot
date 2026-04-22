@@ -4,13 +4,15 @@ Docker healthcheck.
 Returns 0 if:
   - Python bot process is running (main.py)
   - PulseAudio sink `musicbot_sink` exists
-  - WebQuery API is reachable
+  - ServerQuery transport is reachable (WebQuery HTTP if TS_WEBQUERY_APIKEY set,
+    otherwise a TCP reachability check on TS_QUERY_PORT)
 
 Returns 1 otherwise.
 """
 
 import asyncio
 import os
+import socket
 import subprocess
 import sys
 
@@ -57,11 +59,30 @@ async def _check_webquery() -> bool:
         return False
 
 
+def _check_serverquery_tcp() -> bool:
+    """Cheap TCP reachability check on TS_QUERY_PORT. Used when WebQuery is off."""
+    host = os.getenv("TS_SERVER_HOST", "localhost")
+    try:
+        port = int(os.getenv("TS_QUERY_PORT", "10022"))
+    except ValueError:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=5):
+            return True
+    except Exception:
+        return False
+
+
 async def main() -> int:
+    # Pick the transport check that matches how main.py connects.
+    use_webquery = bool(os.getenv("TS_WEBQUERY_APIKEY"))
+    transport_key = "webquery" if use_webquery else "serverquery"
+    transport_ok = await _check_webquery() if use_webquery else _check_serverquery_tcp()
+
     checks = {
         "bot_process": _check_bot_process(),
         "pulse_sink": _check_pulse_sink(),
-        "webquery": await _check_webquery(),
+        transport_key: transport_ok,
     }
     ok = all(checks.values())
     status = "OK" if ok else "FAIL"
