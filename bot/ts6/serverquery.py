@@ -14,9 +14,8 @@ import asyncio
 import logging
 import os
 
-import asyncssh
-
 from .chat_listener import _ts_decode, _tokenize
+from .transport import open_transport, _LineTransport
 
 log = logging.getLogger(__name__)
 
@@ -52,45 +51,8 @@ def _parse_records(resp: str) -> list[dict]:
     return records
 
 
-class _CmdSession(asyncssh.SSHClientSession):
-    """SSH session used exclusively for request/response command pairs."""
-
-    def __init__(self):
-        self._buf = ""
-        self._ev = asyncio.Event()
-        self._closed = False
-
-    def data_received(self, data, datatype):
-        self._buf += data
-        self._ev.set()
-
-    def connection_lost(self, exc):
-        self._closed = True
-        self._ev.set()
-
-    async def cmd(self, chan, command: str, timeout: float = 10) -> str:
-        """Send a command and wait for the `error id=...` terminator."""
-        self._buf = ""
-        self._ev.clear()
-        chan.write(command + "\n")
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while not self._closed:
-            # Look for the response terminator "error id=0" or any "error id=N"
-            for line in self._buf.split("\n"):
-                if line.lstrip().startswith("error id="):
-                    return self._buf.strip()
-            remaining = max(0.05, deadline - loop.time())
-            self._ev.clear()
-            try:
-                await asyncio.wait_for(self._ev.wait(), timeout=remaining)
-            except asyncio.TimeoutError:
-                break
-        return self._buf.strip()
-
-
 class ServerQueryClient:
-    """WebQueryClient-compatible facade over SSH ServerQuery."""
+    """WebQueryClient-compatible facade over TS3/TS6 ServerQuery (raw or SSH)."""
 
     def __init__(self):
         self._host = os.getenv("TS_SERVER_HOST", "localhost")
@@ -98,9 +60,7 @@ class ServerQueryClient:
         self._username = os.getenv("TS_QUERY_USERNAME", "")
         self._password = os.getenv("TS_QUERY_PASSWORD", "")
 
-        self._conn: asyncssh.SSHClientConnection | None = None
-        self._chan = None
-        self._session: _CmdSession | None = None
+        self._transport: _LineTransport | None = None
         self._lock = asyncio.Lock()
 
         # WebQueryClient-compat: stores the cid to which messages are sent
@@ -113,44 +73,37 @@ class ServerQueryClient:
             "ServerQueryClient: connecting to %s:%d as %s",
             self._host, self._port, self._username,
         )
-        self._conn, _ = await asyncssh.create_connection(
-            asyncssh.SSHClient,
-            self._host,
-            self._port,
-            username=self._username,
-            password=self._password,
-            known_hosts=None,
+        self._transport = await open_transport(
+            self._host, self._port, self._username, self._password
         )
-        self._chan, self._session = await self._conn.create_session(_CmdSession)
-        # TS3 sends a banner; give it a moment then drain.
-        await asyncio.sleep(0.3)
-        self._session._buf = ""
         resp = await self._cmd_locked("use 1")
         log.debug("use 1: %s", resp)
 
     async def stop(self) -> None:
-        if self._chan:
-            try:
-                self._chan.close()
-            except Exception:
-                pass
-        if self._conn:
-            self._conn.close()
-            try:
-                await self._conn.wait_closed()
-            except Exception:
-                pass
-        self._chan = None
-        self._session = None
-        self._conn = None
+        if self._transport:
+            await self._transport.close()
+        self._transport = None
 
     # ── Low-level RPC ──────────────────────────────────────────────────────
 
     async def _cmd_locked(self, command: str, timeout: float = 10) -> str:
         async with self._lock:
-            if not self._session or not self._chan:
+            if not self._transport:
                 raise RuntimeError("ServerQueryClient not started")
-            return await self._session.cmd(self._chan, command, timeout=timeout)
+            self._transport.drain_buffer()
+            self._transport.send_line(command)
+            collected = ""
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while True:
+                remaining = max(0.05, deadline - loop.time())
+                line = await self._transport.read_line(timeout=remaining)
+                if line is None:
+                    break
+                collected += line + "\n"
+                if line.lstrip().startswith("error "):
+                    break
+            return collected.strip()
 
     # ── Read operations ────────────────────────────────────────────────────
 

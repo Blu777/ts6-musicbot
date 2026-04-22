@@ -1,5 +1,8 @@
 """
-Receives channel chat messages from TS6 via SSH ServerQuery (port 10012).
+Receives channel chat messages from TS3/TS6 via ServerQuery.
+
+Uses the `transport` module so it works with either raw TCP (port 10011) or
+SSH (port 10022), auto-selected by the TS_QUERY_PORT env var.
 
 Connects with the dedicated query login (TS_QUERY_USERNAME / TS_QUERY_PASSWORD),
 selects virtual server 1, moves into the target channel, and registers for
@@ -13,8 +16,6 @@ Reconnects automatically on disconnect.
 import asyncio
 import logging
 import os
-
-import asyncssh
 
 log = logging.getLogger(__name__)
 
@@ -84,76 +85,21 @@ def _parse_notify(line: str) -> tuple[str, str] | None:
 _parse_line = _parse_notify
 
 
-class _TSQuerySession(asyncssh.SSHClientSession):
-    """Event-based ServerQuery session — no Queue, avoids timeout accumulation."""
-
-    def __init__(self):
-        self._buf = ""
-        self._ev = asyncio.Event()
-
-    def data_received(self, data, datatype):
-        self._buf += data
-        self._ev.set()
-
-    def connection_lost(self, exc):
-        self._ev.set()
-
-    async def cmd(self, chan, command: str, timeout: float = 5) -> str:
-        """Send a command and return the full response (waits for 'msg=')."""
-        self._ev.clear()
-        chan.write(command + "\n")
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while True:
-            if "msg=" in self._buf:
-                out = self._buf
-                self._buf = ""
-                return out.strip()
-            remaining = max(0.05, deadline - loop.time())
-            self._ev.clear()
-            try:
-                await asyncio.wait_for(self._ev.wait(), timeout=remaining)
-            except asyncio.TimeoutError:
-                break
-        out = self._buf
-        self._buf = ""
-        return out.strip()
-
-    async def wait_for_notify(self, timeout: float = 30) -> str | None:
-        """Wait for a 'notify*' push event from the server."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while True:
-            lines = self._buf.split("\n")
-            for i, line in enumerate(lines):
-                stripped = line.strip("\r ")
-                if stripped.startswith("notify"):
-                    self._buf = "\n".join(lines[i + 1 :])
-                    return stripped
-            remaining = max(0.05, deadline - loop.time())
-            self._ev.clear()
-            try:
-                await asyncio.wait_for(self._ev.wait(), timeout=remaining)
-            except asyncio.TimeoutError:
-                return None
-
-
 class ChatListener:
     def __init__(self, client, on_message_callback, poll_interval: float = 1.5):
-        self.client = client  # WebQueryClient — used to look up channel ID
+        self.client = client  # WebQueryClient or ServerQueryClient — used to look up channel ID
         self.on_message = on_message_callback
         self._running = False
 
         self._host = os.getenv("TS_SERVER_HOST", "localhost")
-        self._port = int(os.getenv("TS_QUERY_PORT", "10012"))
+        self._port = int(os.getenv("TS_QUERY_PORT", "10022"))
         self._username = os.getenv("TS_QUERY_USERNAME", "musicbot")
         self._password = os.getenv("TS_QUERY_PASSWORD", "")
         self._channel = os.getenv("TS_CHANNEL", "")
 
         # Exposed for live channel moves
-        self._chan = None       # asyncssh channel
-        self._session = None    # _TSQuerySession
-        self._clid = None       # SSH query client ID
+        self._transport = None
+        self._clid: str | None = None
 
     async def start(self):
         self._running = True
@@ -170,7 +116,7 @@ class ChatListener:
         self._running = False
 
     async def move_to_channel(self, channel_name: str) -> bool:
-        """Move the SSH query session to a different channel at runtime.
+        """Move the query session to a different channel at runtime.
 
         Also moves the TS6 desktop client (the audio source) via WebQuery
         and re-registers for text events in the new channel.
@@ -185,45 +131,71 @@ class ChatListener:
         except Exception as e:
             log.warning("Could not move TS6 client: %s", e)
 
-        if self._chan and self._session and self._clid:
-            resp = await self._session.cmd(
-                self._chan, f"clientmove clid={self._clid} cid={cid}"
-            )
-            log.info("SSH query moved to %s (cid=%s): %s", channel_name, cid, resp)
+        if self._transport and self._clid:
+            resp = await self._cmd(f"clientmove clid={self._clid} cid={cid}")
+            log.info("Query session moved to %s (cid=%s): %s", channel_name, cid, resp)
 
-            await self._session.cmd(self._chan, "servernotifyregister event=textchannel")
-            await self._session.cmd(self._chan, "servernotifyregister event=textprivate")
+            await self._cmd("servernotifyregister event=textchannel")
+            await self._cmd("servernotifyregister event=textprivate")
             log.info("Re-registered text events in %s", channel_name)
 
         self._channel = channel_name
         self.client._channel_id = cid
         return True
 
+    async def _cmd(self, command: str, timeout: float = 5) -> str:
+        """Send a command and collect response lines up to `error id=...`.
+
+        Discards any notify* lines that arrive in the middle (they are handled
+        by the main loop via `wait_for_notify`).
+        """
+        assert self._transport is not None
+        self._transport.send_line(command)
+        collected = ""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            remaining = max(0.05, deadline - loop.time())
+            line = await self._transport.read_line(timeout=remaining)
+            if line is None:
+                break
+            if line.lstrip().startswith("notify"):
+                # Push the notify back to the head of the buffer so the main
+                # loop sees it. Simplest way: feed it back with newline.
+                self._transport._feed(line + "\n")  # type: ignore[attr-defined]
+                continue
+            collected += line + "\n"
+            if line.lstrip().startswith("error "):
+                break
+        return collected.strip()
+
+    async def _wait_for_notify(self, timeout: float = 30) -> str | None:
+        assert self._transport is not None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            remaining = max(0.05, deadline - loop.time())
+            line = await self._transport.read_line(timeout=remaining)
+            if line is None:
+                return None
+            if line.lstrip().startswith("notify"):
+                return line.strip()
+            # Ignore stray lines (shouldn't happen outside of an active _cmd)
+
     async def _connect_and_listen(self):
+        from .transport import open_transport
         log.info(
-            "Connecting to SSH ServerQuery at %s:%d as %s",
+            "Connecting to ServerQuery at %s:%d as %s",
             self._host, self._port, self._username,
         )
-        conn, _ = await asyncssh.create_connection(
-            asyncssh.SSHClient,
-            self._host,
-            self._port,
-            username=self._username,
-            password=self._password,
-            known_hosts=None,
+        self._transport = await open_transport(
+            self._host, self._port, self._username, self._password
         )
-        async with conn:
-            chan, session = await conn.create_session(_TSQuerySession)
-            self._chan = chan
-            self._session = session
-
-            await asyncio.sleep(0.5)
-            session._buf = ""
-
-            resp = await session.cmd(chan, "use 1")
+        try:
+            resp = await self._cmd("use 1")
             log.debug("use 1: %s", resp)
 
-            whoami = await session.cmd(chan, "whoami")
+            whoami = await self._cmd("whoami")
             log.debug("whoami: %s", whoami)
             self._clid = None
             for part in whoami.split():
@@ -239,22 +211,21 @@ class ChatListener:
                     pass
 
             if self._clid and cid:
-                resp = await session.cmd(chan, f"clientmove clid={self._clid} cid={cid}")
-                log.info("Moved to channel %s (cid=%s): %s", self._channel, cid, resp)
+                resp = await self._cmd(f"clientmove clid={self._clid} cid={cid}")
+                log.info("Moved to channel %s (cid=%s)", self._channel, cid)
             else:
                 log.warning("Could not move to channel (clid=%s cid=%s)", self._clid, cid)
 
-            r1 = await session.cmd(chan, "servernotifyregister event=textchannel")
+            r1 = await self._cmd("servernotifyregister event=textchannel")
             log.info("Register textchannel: %s", r1)
-            r2 = await session.cmd(chan, "servernotifyregister event=textprivate")
+            r2 = await self._cmd("servernotifyregister event=textprivate")
             log.info("Register textprivate: %s", r2)
             log.info("ChatListener ready — waiting for messages in %s...", self._channel)
 
             while self._running:
-                notify = await session.wait_for_notify(timeout=30)
+                notify = await self._wait_for_notify(timeout=30)
                 if notify is None:
-                    # keepalive
-                    await session.cmd(chan, "version", timeout=5)
+                    await self._cmd("version", timeout=5)
                     continue
                 log.debug("Event: %s", notify)
                 parsed = _parse_notify(notify)
@@ -262,5 +233,7 @@ class ChatListener:
                     sender, text = parsed
                     log.debug("Chat from %s: %s", sender, text)
                     await self.on_message(sender, text)
-
-            chan.close()
+        finally:
+            if self._transport:
+                await self._transport.close()
+            self._transport = None
