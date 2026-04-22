@@ -193,6 +193,11 @@ class AudioPlayer:
                 "-thread_queue_size", "8192",
             ]
 
+        # Bigger buffer helps smooth out:
+        #  - yt-dlp -> ffmpeg read hiccups
+        #  - Pulse sink underruns if the TS6 encoder grabs late
+        # Configurable via AUDIO_BUFFER_MS (default 10s).
+        buffer_ms = os.getenv("AUDIO_BUFFER_MS", "10000")
         cmd = [
             "ffmpeg",
             "-loglevel", "warning",
@@ -204,7 +209,7 @@ class AudioPlayer:
             "-ac", "2",
             # No -af volume=: volume is controlled at the sink level via pactl.
             "-f", "pulse",
-            "-buffer_duration", "5000",
+            "-buffer_duration", buffer_ms,
             PULSE_SINK,
         ]
         env = os.environ.copy()
