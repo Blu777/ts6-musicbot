@@ -1,0 +1,17 @@
+# Normalize text files to LF on commit; checkout preserves platform default
+# except for shell scripts and Dockerfiles where LF is required by the runtime.
+* text=auto eol=lf
+
+# Force LF regardless of platform (breaks bash/docker otherwise)
+*.sh       text eol=lf
+Dockerfile text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.ini      text eol=lf
+.env.example text eol=lf
+
+# Binary: never munge line endings
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.tar.gz binary
