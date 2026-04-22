@@ -4,4 +4,7 @@
 .env
 .git
 *.md
+# NOTICE.md is needed by the Dockerfile as a glob-sibling guard for the
+# optional teamspeak-client.tar.gz COPY — keep it in the build context.
+!NOTICE.md
 bot/tests
