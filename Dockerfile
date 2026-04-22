@@ -2,7 +2,8 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DISPLAY=:99
-# PULSE_SERVER is set dynamically in entrypoint.sh after PulseAudio starts
+# PULSE_SERVER is set at runtime in entrypoint.sh after PulseAudio starts
+ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y \
     pulseaudio \
@@ -18,6 +19,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     jq \
+    gosu \
+    procps \
     libglib2.0-0 \
     libnss3 \
     libatk1.0-0 \
@@ -34,7 +37,8 @@ RUN apt-get update && apt-get install -y \
     libnotify4 \
     && rm -rf /var/lib/apt/lists/*
 
-# yt-dlp (latest from GitHub, more up to date than pip)
+# yt-dlp (latest from GitHub). Will be further upgraded at container start
+# by bot/main.py (AUTO_UPDATE_YT_DLP=1) to keep up with extractor changes.
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp
 
@@ -42,22 +46,20 @@ RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
 # ── Versión verificada ────────────────────────────────────────────────────────
 # Archivo: teamspeak-client.tar.gz  (excluido del repo por tamaño, 183 MB)
 # SHA-256: b9ba408a0b58170ce32384fc8bba56800840d694bd310050cbadd09246d4bf27
-# MD5:     0464db3534303c5e32ea0aaec300ad90
-# Fecha descarga: 2025-03-25
 # Fuente:  https://teamspeak.com/en/downloads/#client  (Linux, 64-bit)
-# Extraído en /opt/ts6/ — binario principal: TeamSpeak
 # ─────────────────────────────────────────────────────────────────────────────
 COPY teamspeak-client.tar.gz /tmp/ts6client.tar.gz
 RUN mkdir -p /opt/ts6 \
     && tar -xzf /tmp/ts6client.tar.gz -C /opt/ts6 --no-same-permissions --no-same-owner \
     && rm /tmp/ts6client.tar.gz \
-    && chmod +x /opt/ts6/TeamSpeak \
-    && chown root:root /opt/ts6/chrome-sandbox \
-    && chmod 4755 /opt/ts6/chrome-sandbox
+    && chmod +x /opt/ts6/TeamSpeak
 
-# Pre-configure TS6 client
-RUN mkdir -p /root/.config/TeamSpeak
-COPY ts6_config/settings.ini /root/.config/TeamSpeak/settings.ini
+# Create non-root user `musicbot` (UID/GID can be remapped at runtime via
+# PUID/PGID env vars, TrueNAS-style). We use --no-sandbox for TS6 so we
+# don't need the SUID chrome-sandbox.
+RUN groupadd -g 1000 musicbot \
+    && useradd -u 1000 -g 1000 -m -s /bin/bash musicbot \
+    && usermod -a -G audio,pulse,pulse-access musicbot 2>/dev/null || true
 
 WORKDIR /app
 
@@ -68,5 +70,12 @@ COPY bot/ ./bot/
 COPY scripts/ ./scripts/
 COPY ts6_config/ ./ts6_config/
 RUN chmod +x scripts/*.sh
+
+# Default runtime dirs (can be overridden via env)
+ENV AUDIO_CACHE_DIR=/data/cache
+ENV TS6_CONFIG_DIR=/data/ts6-config
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+    CMD python3 /app/bot/healthcheck.py || exit 1
 
 CMD ["./scripts/entrypoint.sh"]

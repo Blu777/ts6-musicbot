@@ -5,9 +5,6 @@ Connects with the dedicated query login (TS_QUERY_USERNAME / TS_QUERY_PASSWORD),
 selects virtual server 1, moves into the target channel, and registers for
 'textchannel' and 'textprivate' events.
 
-TS6 event types for servernotifyregister:
-  server | channel | textserver | textchannel | textprivate | bans
-
 Notifications arrive as: notifytextmessage targetmode=2 msg=... invokername=...
 
 Reconnects automatically on disconnect.
@@ -16,37 +13,75 @@ Reconnects automatically on disconnect.
 import asyncio
 import logging
 import os
-import re
 
 import asyncssh
 
 log = logging.getLogger(__name__)
 
-_TS_UNESCAPE = {r'\s': ' ', r'\p': '|', r'\/': '/', r'\\': '\\'}
+
+# ── TS3/TS6 ServerQuery escape decoding ───────────────────────────────────────
+# Ref: https://yat.qa/ressourcen/escape-sequences/
+_TS_UNESCAPE = [
+    (r"\\", "\\"),  # must come first to avoid double-unescape
+    (r"\/", "/"),
+    (r"\s", " "),
+    (r"\p", "|"),
+    (r"\a", "\x07"),
+    (r"\b", "\b"),
+    (r"\f", "\f"),
+    (r"\n", "\n"),
+    (r"\r", "\r"),
+    (r"\t", "\t"),
+    (r"\v", "\v"),
+]
 
 
 def _ts_decode(s: str) -> str:
-    for k, v in _TS_UNESCAPE.items():
+    for k, v in _TS_UNESCAPE:
         s = s.replace(k, v)
     return s
 
 
-_NOTIFY_RE = re.compile(
-    r"notifytextmessage\b"
-    r".*?\bmsg=(?P<msg>\S+)"
-    r".*?\binvokername=(?P<sender>\S+)",
-    re.IGNORECASE,
-)
+def _tokenize(line: str) -> dict:
+    """Parse a ServerQuery line (space-separated key=value tokens) into a dict.
+
+    Order-independent; robust to extra fields. Values are TS-decoded.
+    Tokens without '=' are stored under empty-string key as a list of flags.
+    """
+    out: dict = {}
+    for tok in line.split(" "):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "=" in tok:
+            k, _, v = tok.partition("=")
+            out[k] = _ts_decode(v)
+        else:
+            out.setdefault("_verb", tok)
+    return out
 
 
 def _parse_notify(line: str) -> tuple[str, str] | None:
-    """Parse a notifytextmessage line → (sender, message) or None."""
-    m = _NOTIFY_RE.search(line)
-    if not m:
+    """Parse a notifytextmessage line → (sender, message) or None.
+
+    Accepts any order of fields, any extra fields. Returns None if it's not a
+    textmessage or required fields are missing.
+    """
+    stripped = line.lstrip()
+    # Accept both `notifytextmessage ...` and the chat_log style
+    # `textmessage ...` that the client echoes to its log file.
+    if not (stripped.startswith("notifytextmessage") or " textmessage " in stripped or stripped.startswith("textmessage")):
         return None
-    msg = _ts_decode(m.group("msg"))
-    sender = _ts_decode(m.group("sender"))
-    return (sender, msg) if sender and msg else None
+    fields = _tokenize(stripped)
+    sender = fields.get("invokername")
+    msg = fields.get("msg")
+    if not sender or not msg:
+        return None
+    return sender, msg
+
+
+# Backward-compat alias used by tests / downstream code
+_parse_line = _parse_notify
 
 
 class _TSQuerySession(asyncssh.SSHClientSession):
@@ -139,27 +174,23 @@ class ChatListener:
 
         Also moves the TS6 desktop client (the audio source) via WebQuery
         and re-registers for text events in the new channel.
-        Returns True on success.
         """
         cid = await self.client.find_channel_id(channel_name)
         if cid is None:
             return False
 
-        # Move the TS6 desktop client (audio source) via WebQuery
         try:
             ts_clid = await self.client.get_own_client_id()
             await self.client.post("clientmove", {"clid": ts_clid, "cid": cid})
         except Exception as e:
             log.warning("Could not move TS6 client: %s", e)
 
-        # Move the SSH query session
         if self._chan and self._session and self._clid:
             resp = await self._session.cmd(
                 self._chan, f"clientmove clid={self._clid} cid={cid}"
             )
             log.info("SSH query moved to %s (cid=%s): %s", channel_name, cid, resp)
 
-            # Re-register for text events in the new channel
             await self._session.cmd(self._chan, "servernotifyregister event=textchannel")
             await self._session.cmd(self._chan, "servernotifyregister event=textprivate")
             log.info("Re-registered text events in %s", channel_name)
@@ -186,7 +217,6 @@ class ChatListener:
             self._chan = chan
             self._session = session
 
-            # Let banner arrive then discard it
             await asyncio.sleep(0.5)
             session._buf = ""
 
@@ -201,7 +231,6 @@ class ChatListener:
                     self._clid = part.split("=", 1)[1]
                     break
 
-            # Resolve channel ID via WebQueryClient (already cached after join_channel)
             cid = getattr(self.client, "_channel_id", None)
             if cid is None and self._channel:
                 try:

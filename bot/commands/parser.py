@@ -2,24 +2,39 @@
 Chat command dispatcher.
 
 Commands (channel chat only):
-  !play <query|URL>   Enqueue track and start playback
-  !skip               Skip current track
-  !stop               Clear queue and stop playback
-  !queue              Show queued tracks (first 10)
-  !np                 Now playing
-  !vol <0-100>        Set volume
-  !move <channel>     Move bot to another channel
-  !help               List commands
+  !play <query|URL>    Enqueue track and start playback
+  !playlist <URL>      Enqueue a playlist (capped at MAX_PLAYLIST_ITEMS)
+  !skip                Skip current track
+  !stop                Clear queue and stop playback
+  !pause               Pause current track
+  !resume              Resume paused track
+  !shuffle             Shuffle pending queue
+  !clear               Clear pending queue (keeps current track)
+  !queue               Show queued tracks (first 10)
+  !np                  Now playing
+  !vol <0-100>         Set volume
+  !move <channel>      Move bot to another channel
+  !help                List commands
 """
 
 import logging
+
 from audio.player import AudioPlayer
-from audio.resolver import resolve, download_track
+from audio.resolver import download_track, resolve, resolve_playlist
 from ts6.webquery import WebQueryClient
 
 log = logging.getLogger(__name__)
 
 BOT_NICKNAME: str | None = None
+
+
+def _fmt_duration(seconds: int) -> str:
+    seconds = int(seconds or 0)
+    mins, secs = divmod(seconds, 60)
+    if mins >= 60:
+        h, m = divmod(mins, 60)
+        return f"{h}:{m:02d}:{secs:02d}"
+    return f"{mins}:{secs:02d}"
 
 
 class CommandParser:
@@ -41,8 +56,13 @@ class CommandParser:
 
         handlers = {
             "!play": self._cmd_play,
+            "!playlist": self._cmd_playlist,
             "!skip": self._cmd_skip,
             "!stop": self._cmd_stop,
+            "!pause": self._cmd_pause,
+            "!resume": self._cmd_resume,
+            "!shuffle": self._cmd_shuffle,
+            "!clear": self._cmd_clear,
             "!queue": self._cmd_queue,
             "!np": self._cmd_np,
             "!vol": self._cmd_vol,
@@ -53,7 +73,16 @@ class CommandParser:
 
         handler = handlers.get(cmd)
         if handler:
-            await handler(sender, args)
+            try:
+                await handler(sender, args)
+            except Exception as e:
+                log.exception("Handler %s failed", cmd)
+                try:
+                    await self.ts.send_channel_message(f"Error en {cmd}: {e}")
+                except Exception:
+                    pass
+
+    # ── Playback ────────────────────────────────────────────────────────────
 
     async def _cmd_play(self, sender: str, args: str) -> None:
         if not args:
@@ -62,27 +91,50 @@ class CommandParser:
         await self.ts.send_channel_message(f"Buscando: {args}...")
         try:
             track = await resolve(args)
-            mins, secs = divmod(track["duration"], 60)
-            await self.ts.send_channel_message(
-                f"Encontrado: {track['title']} ({mins}:{secs:02d}) — descargando..."
-            )
-
-            last_sent = [0]
-
-            async def on_progress(pct: int) -> None:
-                if pct - last_sent[0] >= 25 or pct == 100:
-                    last_sent[0] = pct
-                    await self.ts.send_channel_message(f"Descargando: {pct}%")
-
-            local_path = await download_track(track, on_progress)
-            track = {**track, "local_path": local_path}
-
-            pos = await self.player.enqueue(track)
-            await self.ts.send_channel_message(
-                f"[{pos}] {track['title']} ({mins}:{secs:02d}) - pedido por {sender}"
-            )
         except Exception as e:
             await self.ts.send_channel_message(f"No encontre nada: {e}")
+            return
+
+        dur = _fmt_duration(track["duration"])
+        await self.ts.send_channel_message(
+            f"Encontrado: {track['title']} ({dur}) — descargando..."
+        )
+
+        last_sent = [0]
+
+        async def on_progress(pct: int) -> None:
+            if pct - last_sent[0] >= 25 or pct == 100:
+                last_sent[0] = pct
+                await self.ts.send_channel_message(f"Descargando: {pct}%")
+
+        try:
+            local_path = await download_track(track, on_progress)
+            track = {**track, "local_path": local_path}
+        except Exception as e:
+            log.warning("Download failed for %s: %s — will stream instead", track["title"], e)
+
+        pos = await self.player.enqueue(track)
+        await self.ts.send_channel_message(
+            f"[{pos}] {track['title']} ({dur}) - pedido por {sender}"
+        )
+
+    async def _cmd_playlist(self, sender: str, args: str) -> None:
+        if not args or not args.startswith("http"):
+            await self.ts.send_channel_message("Uso: !playlist <URL>")
+            return
+        await self.ts.send_channel_message(f"Resolviendo playlist: {args}")
+        try:
+            tracks = await resolve_playlist(args)
+        except Exception as e:
+            await self.ts.send_channel_message(f"No pude resolver la playlist: {e}")
+            return
+        if not tracks:
+            await self.ts.send_channel_message("La playlist esta vacia o no accesible.")
+            return
+        total = await self.player.enqueue_many(tracks)
+        await self.ts.send_channel_message(
+            f"Encoladas {len(tracks)} pistas (cola total: {total}) - pedido por {sender}"
+        )
 
     async def _cmd_skip(self, sender: str, _: str) -> None:
         await self.player.skip()
@@ -92,19 +144,45 @@ class CommandParser:
         await self.player.stop()
         await self.ts.send_channel_message(f"{sender} detuvo la reproduccion.")
 
+    async def _cmd_pause(self, sender: str, _: str) -> None:
+        ok = await self.player.pause()
+        if ok:
+            await self.ts.send_channel_message(f"{sender} pauso la reproduccion.")
+        else:
+            await self.ts.send_channel_message("No hay nada que pausar.")
+
+    async def _cmd_resume(self, sender: str, _: str) -> None:
+        ok = await self.player.resume()
+        if ok:
+            await self.ts.send_channel_message(f"{sender} reanudo la reproduccion.")
+        else:
+            await self.ts.send_channel_message("No hay nada pausado.")
+
+    async def _cmd_shuffle(self, sender: str, _: str) -> None:
+        n = await self.player.shuffle()
+        await self.ts.send_channel_message(f"Cola mezclada ({n} tracks).")
+
+    async def _cmd_clear(self, sender: str, _: str) -> None:
+        n = await self.player.clear_queue()
+        await self.ts.send_channel_message(f"Cola limpiada ({n} tracks removidos).")
+
     async def _cmd_queue(self, sender: str, _: str) -> None:
         if not self.player.queue:
             await self.ts.send_channel_message("La cola esta vacia.")
             return
         lines = [f"{i+1}. {t['title']}" for i, t in enumerate(self.player.queue[:10])]
-        await self.ts.send_channel_message("Cola:\n" + "\n".join(lines))
+        more = ""
+        if len(self.player.queue) > 10:
+            more = f"\n...y {len(self.player.queue) - 10} mas"
+        await self.ts.send_channel_message("Cola:\n" + "\n".join(lines) + more)
 
     async def _cmd_np(self, sender: str, _: str) -> None:
         track = self.player.current_track()
         if track:
-            mins, secs = divmod(track["duration"], 60)
+            dur = _fmt_duration(track["duration"])
+            state = " (pausado)" if self.player.is_paused() else ""
             await self.ts.send_channel_message(
-                f"Reproduciendo: {track['title']} ({mins}:{secs:02d})"
+                f"Reproduciendo{state}: {track['title']} ({dur})"
             )
         else:
             await self.ts.send_channel_message("No hay nada reproduciendose.")
@@ -112,10 +190,13 @@ class CommandParser:
     async def _cmd_vol(self, sender: str, args: str) -> None:
         try:
             vol = int(args)
-            await self.player.set_volume(vol)
-            await self.ts.send_channel_message(f"Volumen: {vol}%")
         except ValueError:
             await self.ts.send_channel_message("Uso: !vol <0-100>")
+            return
+        await self.player.set_volume(vol)
+        await self.ts.send_channel_message(f"Volumen: {self.player.volume}%")
+
+    # ── Meta ────────────────────────────────────────────────────────────────
 
     async def _cmd_move(self, sender: str, args: str) -> None:
         if not args:
@@ -128,7 +209,7 @@ class CommandParser:
         ok = await self.listener.move_to_channel(args)
         if ok:
             await self.ts.send_channel_message(
-                f"Movido a {args} por {sender}. La musica sigue disponible."
+                f"Movido a {args} por {sender}."
             )
         else:
             await self.ts.send_channel_message(f"Canal no encontrado: {args}")
@@ -154,6 +235,6 @@ class CommandParser:
 
     async def _cmd_help(self, sender: str, _: str) -> None:
         await self.ts.send_channel_message(
-            "Comandos: !play <query> | !skip | !stop | !queue | !np "
-            "| !vol <n> | !move <canal> | !help"
+            "Comandos: !play <q> | !playlist <url> | !skip | !stop | !pause | !resume "
+            "| !shuffle | !clear | !queue | !np | !vol <n> | !move <canal> | !help"
         )

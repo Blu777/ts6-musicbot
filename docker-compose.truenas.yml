@@ -1,0 +1,50 @@
+# TrueNAS SCALE 24.10+ (Electric Eel / Fangtooth) "Custom App" compose file.
+#
+# 1. En TrueNAS crea el dataset parent: /mnt/<pool>/apps/ts6-musicbot
+#    con dos subdirectorios: data/ y build/ (o clona el repo en build/).
+# 2. Descarga teamspeak-client.tar.gz (Linux 64-bit) y pégalo en build/.
+# 3. Copia .env.example → build/.env y complétalo.
+# 4. Ajusta abajo el path al dataset (MNT_PATH) y tu PUID/PGID (por defecto
+#    TrueNAS usa el usuario "apps" con UID 568).
+# 5. Apps → Discover Apps → Custom App → pega este archivo.
+#
+# Documentación: https://www.truenas.com/docs/scale/24.10/scaletutorials/apps/usingcustomapp/
+
+services:
+  ts6-musicbot:
+    build: /mnt/tank/apps/ts6-musicbot/build  # ⚠️ ajusta al path de tu pool
+    image: ts6-musicbot:latest
+    container_name: ts6-musicbot
+    restart: unless-stopped
+
+    env_file: /mnt/tank/apps/ts6-musicbot/build/.env   # ⚠️ ajusta
+
+    environment:
+      - DISPLAY=:99
+      - PUID=568      # usuario "apps" estándar de TrueNAS SCALE
+      - PGID=568
+      - AUDIO_CACHE_DIR=/data/cache
+      - TS6_CONFIG_DIR=/data/ts6-config
+      - LOG_LEVEL=INFO
+      - AUTO_UPDATE_YT_DLP=1
+
+    volumes:
+      - /mnt/tank/apps/ts6-musicbot/data:/data   # ⚠️ ajusta
+
+    # No /dev/snd, no cap_add: SYS_ADMIN — el audio es 100% virtual.
+
+    healthcheck:
+      test: ["CMD", "python3", "/app/bot/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Recursos (opcional, recomendado en NAS compartido)
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          memory: 256M

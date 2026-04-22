@@ -1,50 +1,50 @@
 #!/bin/bash
+# TS6 MusicBot entrypoint.
+#
+# Runs as root initially to:
+#   1. Remap the `musicbot` user UID/GID to PUID/PGID (TrueNAS style)
+#   2. Fix ownership on mounted volumes
+#   3. Drop privileges via gosu and exec the actual bootstrap as `musicbot`.
 set -e
 
-# Clean up stale locks from previous runs (persist across docker restart)
+# ── Remap UID/GID if requested ───────────────────────────────────────────────
+PUID="${PUID:-1000}"
+PGID="${PGID:-1000}"
+CUR_UID="$(id -u musicbot 2>/dev/null || echo 0)"
+CUR_GID="$(id -g musicbot 2>/dev/null || echo 0)"
+
+if [ "$CUR_UID" != "$PUID" ] || [ "$CUR_GID" != "$PGID" ]; then
+    echo "[entrypoint] Remapping musicbot to UID=$PUID GID=$PGID"
+    groupmod -o -g "$PGID" musicbot
+    usermod -o -u "$PUID" musicbot
+fi
+
+# ── Prepare data directories ─────────────────────────────────────────────────
+AUDIO_CACHE_DIR="${AUDIO_CACHE_DIR:-/data/cache}"
+TS6_CONFIG_DIR="${TS6_CONFIG_DIR:-/data/ts6-config}"
+mkdir -p "$AUDIO_CACHE_DIR" "$TS6_CONFIG_DIR" /tmp/pulse /var/log/musicbot
+chown -R musicbot:musicbot "$AUDIO_CACHE_DIR" "$TS6_CONFIG_DIR" /tmp/pulse /var/log/musicbot
+
+# TS6 client reads its config from $HOME/.config/TeamSpeak by default.
+# We point $HOME at the persistent dir and symlink the config.
+MUSICBOT_HOME="$(getent passwd musicbot | cut -d: -f6)"
+mkdir -p "$MUSICBOT_HOME/.config"
+if [ ! -L "$MUSICBOT_HOME/.config/TeamSpeak" ]; then
+    rm -rf "$MUSICBOT_HOME/.config/TeamSpeak"
+    ln -s "$TS6_CONFIG_DIR" "$MUSICBOT_HOME/.config/TeamSpeak"
+fi
+# Always refresh the settings.ini from the image (overrides stale copies)
+cp /app/ts6_config/settings.ini "$TS6_CONFIG_DIR/settings.ini"
+chown -R musicbot:musicbot "$MUSICBOT_HOME/.config" "$TS6_CONFIG_DIR"
+
+# Clean up stale locks from previous runs
 rm -f /tmp/.X99-lock
 pkill -9 pulseaudio 2>/dev/null || true
-rm -f /run/pulse.pid /run/pulseaudio.pid /root/.config/pulse/pid 2>/dev/null || true
-rm -rf /tmp/pulse* 2>/dev/null || true
+rm -f /run/pulse.pid /run/pulseaudio.pid "$MUSICBOT_HOME/.config/pulse/pid" 2>/dev/null || true
+rm -rf /tmp/pulse-* 2>/dev/null || true
 
-echo "[entrypoint] Starting Xvfb on :99..."
-Xvfb :99 -screen 0 1280x720x24 &
-XVFB_PID=$!
-sleep 1
+export HOME="$MUSICBOT_HOME"
+export AUDIO_CACHE_DIR TS6_CONFIG_DIR
 
-echo "[entrypoint] Starting PulseAudio..."
-# Run with explicit socket so pactl and the TS6 client know where to connect.
-# Use -n + manual module load to avoid system.pa config issues in Docker as root.
-PULSE_SOCKET=/tmp/pulse/native
-mkdir -p /tmp/pulse
-pulseaudio -n \
-    --exit-idle-time=-1 \
-    --daemonize=no \
-    --log-target=stderr \
-    --load="module-native-protocol-unix socket=${PULSE_SOCKET} auth-anonymous=1" \
-    --load="module-null-sink sink_name=musicbot_sink sink_properties=device.description=MusicBot_Virtual_Sink rate=48000 format=float32le channels=2 channel_map=front-left,front-right" \
-    --load="module-virtual-source source_name=musicbot_sink.mic master=musicbot_sink.monitor rate=48000 format=float32le channels=2 channel_map=front-left,front-right" \
-    --load="module-null-sink sink_name=musicbot_deaf sink_properties=device.description=MusicBot_Deaf_Sink rate=48000 format=float32le channels=2 channel_map=front-left,front-right" &
-PULSE_PID=$!
-export PULSE_SERVER="unix:${PULSE_SOCKET}"
-sleep 2
-if ! kill -0 $PULSE_PID 2>/dev/null; then
-    echo "[entrypoint] WARNING: PulseAudio failed to start — audio will not work"
-fi
-echo "[entrypoint] PulseAudio socket: ${PULSE_SOCKET}"
-
-# Force-refresh settings.ini on every start — the persistent volume
-# may carry a stale copy from a previous build.
-cp /app/ts6_config/settings.ini /root/.config/TeamSpeak/settings.ini
-
-echo "[entrypoint] Launching TS6 client..."
-/app/scripts/launch_ts6.sh &
-TS6_PID=$!
-sleep 8  # allow client to connect and register with WebQuery
-
-echo "[entrypoint] Starting Python orchestrator..."
-cd /app
-python3 bot/main.py
-
-# Cleanup
-kill $XVFB_PID $TS6_PID $PULSE_PID 2>/dev/null || true
+# ── Drop privileges and run the real bootstrap ───────────────────────────────
+exec gosu musicbot /app/scripts/bootstrap.sh

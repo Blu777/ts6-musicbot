@@ -1,33 +1,35 @@
 services:
   ts6-musicbot:
     build: .
+    image: ts6-musicbot:latest
     container_name: ts6-musicbot
     restart: unless-stopped
-    # network_mode: host  # Uncomment when bot and TS server run on the same machine (self-hosted)
-    #                     # Comment out when connecting to a remote TS server
 
     env_file: .env
 
     environment:
       - DISPLAY=:99
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - AUDIO_CACHE_DIR=/data/cache
+      - TS6_CONFIG_DIR=/data/ts6-config
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AUTO_UPDATE_YT_DLP=${AUTO_UPDATE_YT_DLP:-1}
 
     volumes:
-      - ts6_identity:/root/.config/TeamSpeak
-      - audio_cache:/tmp/audio_cache
+      - ts6_data:/data
+      # Uncomment to bind-mount for TrueNAS / host-managed datasets:
+      # - /mnt/tank/apps/ts6-musicbot/data:/data
 
-    devices:
-      - /dev/snd:/dev/snd
-
-    cap_add:
-      - SYS_ADMIN
+    # Audio is fully virtualized inside the container (PulseAudio null-sink),
+    # so /dev/snd is NOT needed and SYS_ADMIN is NOT needed.
 
     healthcheck:
-      test: ["CMD", "python3", "bot/healthcheck.py"]
+      test: ["CMD", "python3", "/app/bot/healthcheck.py"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 60s
 
 volumes:
-  ts6_identity:
-  audio_cache:
+  ts6_data:

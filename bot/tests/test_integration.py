@@ -24,6 +24,9 @@ load_dotenv(_env_path, override=True)
 
 from ts6.webquery import WebQueryClient  # noqa: E402
 
+# Mark all tests in this module as integration (skipped in CI by default).
+pytestmark = pytest.mark.integration
+
 
 # Shared client for the whole test module — minimises new TCP connections.
 @pytest.fixture(scope="module")

@@ -1,30 +1,48 @@
 """
 Resolves a search query or URL to a streamable audio URL via yt-dlp.
 Supports YouTube, SoundCloud, and any site yt-dlp handles (~1000+).
+
+Cache dir is configurable via AUDIO_CACHE_DIR env var. Default: /tmp/musicbot_cache.
 """
 
 import asyncio
 import hashlib
+import logging
 import os
 import shutil
+
 import yt_dlp
 
-CACHE_DIR = "/tmp/musicbot_cache"
+log = logging.getLogger(__name__)
 
-YDL_OPTS = {
-    # Always pick the highest-quality audio stream available
+CACHE_DIR = os.getenv("AUDIO_CACHE_DIR", "/tmp/musicbot_cache")
+# Hard cap for expanding playlists, to avoid accidental massive enqueues.
+MAX_PLAYLIST_ITEMS = int(os.getenv("MAX_PLAYLIST_ITEMS", "100"))
+
+_BASE_YDL_OPTS = {
     "format": "bestaudio",
-    "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
     "extract_flat": False,
+    # Be polite with YouTube
+    "source_address": "0.0.0.0",
+    "retries": 3,
 }
+
+
+def _ydl_opts(*, noplaylist: bool = True, flat: bool = False) -> dict:
+    opts = dict(_BASE_YDL_OPTS)
+    opts["noplaylist"] = noplaylist
+    if flat:
+        opts["extract_flat"] = "in_playlist"
+    return opts
 
 
 def clear_cache() -> None:
     """Delete all downloaded audio files from the cache directory."""
     if os.path.isdir(CACHE_DIR):
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
+        log.info("Cleared audio cache: %s", CACHE_DIR)
 
 
 def delete_track_file(path: str) -> None:
@@ -36,10 +54,7 @@ def delete_track_file(path: str) -> None:
 
 
 async def download_track(track: dict, progress_cb=None) -> str:
-    """Download track audio to local cache. Returns the file path.
-
-    progress_cb is an async callable(pct: int) called at ~25% intervals.
-    """
+    """Download track audio to local cache. Returns the file path."""
     os.makedirs(CACHE_DIR, exist_ok=True)
     uid = hashlib.md5(track["webpage_url"].encode()).hexdigest()[:12]
     out_tmpl = os.path.join(CACHE_DIR, uid + ".%(ext)s")
@@ -60,63 +75,105 @@ async def download_track(track: dict, progress_cb=None) -> str:
         elif d["status"] == "finished":
             asyncio.run_coroutine_threadsafe(progress_cb(100), loop)
 
-    result_holder = [None]
+    result_holder: list[str | None] = [None]
 
     def _download():
         opts = {
-            "format": "bestaudio",
+            **_ydl_opts(noplaylist=True),
             "outtmpl": out_tmpl,
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
             "progress_hooks": [_hook],
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(track["webpage_url"], download=True)
-            if "entries" in info:
+            if info and "entries" in info:
                 info = info["entries"][0]
             result_holder[0] = ydl.prepare_filename(info)
 
     await loop.run_in_executor(None, _download)
+    assert result_holder[0] is not None
     return result_holder[0]
 
 
 async def resolve(query: str) -> dict:
     """
-    Resolves a search query or URL to track metadata.
+    Resolves a search query or URL to single-track metadata.
     Returns dict with: url, title, duration, webpage_url, uploader.
     Raises ValueError if nothing found.
     """
-    import audio.resolver as _mod
     search_query = query if query.startswith("http") else f"ytsearch1:{query}"
     loop = asyncio.get_running_loop()
-    info = await loop.run_in_executor(None, lambda: _mod._resolve_sync(search_query))
+    info = await loop.run_in_executor(
+        None, lambda: _resolve_sync(search_query, noplaylist=True)
+    )
     if info is None:
         raise ValueError(f"No results for: {query}")
     if "entries" in info:
         info = info["entries"][0]
-    return {
-        "url": info["url"],
-        "title": info.get("title", "Untitled"),
-        "duration": info.get("duration", 0),
-        "webpage_url": info.get("webpage_url", query),
-        "uploader": info.get("uploader", ""),
-    }
+    return _info_to_track(info, fallback_url=query)
+
+
+async def resolve_playlist(url: str, limit: int | None = None) -> list[dict]:
+    """Resolve a playlist URL to a list of track metadata dicts.
+
+    Uses flat extraction first (cheap), then resolves each entry individually
+    only when actually needed. To avoid long blocking calls, we return basic
+    metadata and let the caller re_resolve or download_track per item.
+    """
+    max_items = min(limit or MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS)
+    loop = asyncio.get_running_loop()
+    info = await loop.run_in_executor(
+        None, lambda: _resolve_sync(url, noplaylist=False, flat=True)
+    )
+    if info is None:
+        raise ValueError(f"No playlist at: {url}")
+    entries = info.get("entries") or []
+    tracks: list[dict] = []
+    for e in entries[:max_items]:
+        if not e:
+            continue
+        webpage = e.get("url") or e.get("webpage_url")
+        if not webpage:
+            continue
+        # Flat entries often give just an id; yt-dlp reconstructs the URL lazily.
+        if webpage.startswith("http"):
+            pass
+        elif e.get("ie_key") == "Youtube":
+            webpage = f"https://www.youtube.com/watch?v={webpage}"
+        tracks.append({
+            "url": e.get("url", ""),  # may be empty for flat; re_resolve on play
+            "title": e.get("title", "Untitled"),
+            "duration": e.get("duration", 0) or 0,
+            "webpage_url": webpage,
+            "uploader": e.get("uploader", ""),
+        })
+    return tracks
 
 
 async def re_resolve(webpage_url: str) -> str:
-    """Re-fetch a fresh stream URL from the track's webpage URL.
-    Call this just before playback to avoid expired YouTube stream URLs.
-    """
+    """Re-fetch a fresh stream URL from the track's webpage URL."""
     loop = asyncio.get_running_loop()
-    info = await loop.run_in_executor(None, lambda: _resolve_sync(webpage_url))
+    info = await loop.run_in_executor(
+        None, lambda: _resolve_sync(webpage_url, noplaylist=True)
+    )
+    if info is None:
+        raise ValueError(f"Could not re-resolve {webpage_url}")
     if "entries" in info:
         info = info["entries"][0]
     return info["url"]
 
 
-def _resolve_sync(query: str) -> dict:
-    with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
+def _info_to_track(info: dict, fallback_url: str = "") -> dict:
+    return {
+        "url": info.get("url", ""),
+        "title": info.get("title", "Untitled"),
+        "duration": info.get("duration", 0) or 0,
+        "webpage_url": info.get("webpage_url", fallback_url),
+        "uploader": info.get("uploader", ""),
+    }
+
+
+def _resolve_sync(query: str, *, noplaylist: bool = True, flat: bool = False) -> dict:
+    with yt_dlp.YoutubeDL(_ydl_opts(noplaylist=noplaylist, flat=flat)) as ydl:
         info = ydl.extract_info(query, download=False)
         if info is None:
             raise ValueError(f"No results for: {query}")

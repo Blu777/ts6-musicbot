@@ -14,7 +14,7 @@ CONNECT_URI="ts3server://${TS_SERVER_HOST}?port=${TS_SERVER_PORT:-9988}&nickname
 
 echo "[ts6] Connecting to: $CONNECT_URI"
 
-DISPLAY=:99 PULSE_SINK=musicbot_deaf PULSE_SOURCE=musicbot_sink.monitor "$TS6_BIN" --no-sandbox "$CONNECT_URI" > /tmp/ts6_client.log 2>&1 &
+DISPLAY=:99 PULSE_SINK=musicbot_deaf PULSE_SOURCE="${PULSE_SINK_NAME:-musicbot_sink}.monitor" "$TS6_BIN" --no-sandbox "$CONNECT_URI" > /var/log/musicbot/ts6_client.log 2>&1 &
 
 # If URI argument is not honored by the client, use xdotool fallback:
 # xdotool search --sync --name "TeamSpeak" key ctrl+s

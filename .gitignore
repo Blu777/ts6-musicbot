@@ -9,7 +9,11 @@ venv/
 dist/
 build/
 .mypy_cache/
+.ruff_cache/
 teamspeak-client.tar.gz
 .claude/
+.windsurf/
 docs/
 TS6_MUSICBOT_SPEC.md
+# TrueNAS deployment artifacts
+data/
