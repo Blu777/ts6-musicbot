@@ -7,16 +7,23 @@
 #   3. Drop privileges via gosu and exec the actual bootstrap as `musicbot`.
 set -e
 
+# ── Sanity check: the image MUST have a musicbot user baked in ──────────────
+if ! id musicbot >/dev/null 2>&1; then
+    echo "[entrypoint] FATAL: user 'musicbot' does not exist in the image." >&2
+    echo "[entrypoint] This is an image build bug — please rebuild or pull a newer tag." >&2
+    exit 1
+fi
+
 # ── Remap UID/GID if requested ───────────────────────────────────────────────
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
-CUR_UID="$(id -u musicbot 2>/dev/null || echo 0)"
-CUR_GID="$(id -g musicbot 2>/dev/null || echo 0)"
+CUR_UID="$(id -u musicbot)"
+CUR_GID="$(id -g musicbot)"
 
 if [ "$CUR_UID" != "$PUID" ] || [ "$CUR_GID" != "$PGID" ]; then
     echo "[entrypoint] Remapping musicbot to UID=$PUID GID=$PGID"
     groupmod -o -g "$PGID" musicbot
-    usermod -o -u "$PUID" musicbot
+    usermod -o -u "$PUID" -g "$PGID" musicbot
 fi
 
 # ── Prepare data directories ─────────────────────────────────────────────────

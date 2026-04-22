@@ -69,9 +69,14 @@ RUN if [ -f /tmp/ts6src/teamspeak-client.tar.gz ]; then \
 # Create non-root user `musicbot` (UID/GID can be remapped at runtime via
 # PUID/PGID env vars, TrueNAS-style). We use --no-sandbox for TS6 so we
 # don't need the SUID chrome-sandbox.
-RUN groupadd -g 1000 musicbot \
-    && useradd -u 1000 -g 1000 -m -s /bin/bash musicbot \
-    && usermod -a -G audio,pulse,pulse-access musicbot 2>/dev/null || true
+#
+# ubuntu:24.04 ships with a default `ubuntu` user at UID/GID 1000, so we
+# remove it first — otherwise `groupadd -g 1000` would fail and the previous
+# `|| true` hid the failure, leaving the image without a `musicbot` group.
+RUN userdel -r ubuntu 2>/dev/null || true \
+    && groupadd -g 1000 musicbot \
+    && useradd -u 1000 -g 1000 -m -s /bin/bash musicbot
+RUN usermod -a -G audio,pulse,pulse-access musicbot 2>/dev/null || true
 
 WORKDIR /app
 
