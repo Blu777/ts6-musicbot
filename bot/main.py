@@ -11,6 +11,7 @@ import sys
 from dotenv import load_dotenv
 
 from ts6.webquery import WebQueryClient
+from ts6.serverquery import ServerQueryClient
 from ts6.chat_listener import ChatListener
 from audio.player import AudioPlayer
 from audio.resolver import clear_cache
@@ -64,7 +65,16 @@ async def main():
     _try_update_yt_dlp()
     clear_cache()
 
-    ts_client = WebQueryClient()
+    # Pick the ServerQuery transport:
+    #   - WebQuery HTTP  (TS6 only — requires TS_WEBQUERY_APIKEY)
+    #   - SSH ServerQuery (works on TS3 AND TS6)
+    use_webquery = bool(os.getenv("TS_WEBQUERY_APIKEY"))
+    if use_webquery:
+        log.info("Using WebQuery HTTP client (TS6 mode)")
+        ts_client = WebQueryClient()
+    else:
+        log.info("Using SSH ServerQuery client (TS3/universal mode)")
+        ts_client = ServerQueryClient()
     await ts_client.start()
 
     player = AudioPlayer()
