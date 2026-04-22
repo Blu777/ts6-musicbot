@@ -143,30 +143,48 @@ class ChatListener:
         self.client._channel_id = cid
         return True
 
-    async def _cmd(self, command: str, timeout: float = 5) -> str:
+    async def _cmd(self, command: str, timeout: float = 5,
+                   flood_retries: int = 3) -> str:
         """Send a command and collect response lines up to `error id=...`.
 
         Discards any notify* lines that arrive in the middle (they are handled
         by the main loop via `wait_for_notify`).
+
+        On error id=524 (flood) automatically waits `extra_msg` seconds and
+        retries up to `flood_retries` times.
         """
         assert self._transport is not None
-        self._transport.send_line(command)
-        collected = ""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while True:
-            remaining = max(0.05, deadline - loop.time())
-            line = await self._transport.read_line(timeout=remaining)
-            if line is None:
-                break
-            if line.lstrip().startswith("notify"):
-                # Push the notify back to the head of the buffer so the main
-                # loop sees it. Simplest way: feed it back with newline.
-                self._transport._feed(line + "\n")  # type: ignore[attr-defined]
+        for attempt in range(flood_retries + 1):
+            self._transport.send_line(command)
+            collected = ""
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            error_line = ""
+            while True:
+                remaining = max(0.05, deadline - loop.time())
+                line = await self._transport.read_line(timeout=remaining)
+                if line is None:
+                    break
+                if line.lstrip().startswith("notify"):
+                    self._transport._feed(line + "\n")  # type: ignore[attr-defined]
+                    continue
+                collected += line + "\n"
+                if line.lstrip().startswith("error "):
+                    error_line = line
+                    break
+            if "error id=524" in error_line and attempt < flood_retries:
+                # "please wait N seconds" — parse N, default 1
+                wait_s = 1.0
+                for tok in error_line.split():
+                    if tok.startswith("extra_msg=please\\swait\\s"):
+                        try:
+                            wait_s = float(tok.split("\\s")[2])
+                        except (ValueError, IndexError):
+                            pass
+                log.info("Flood protection hit, retrying in %.1fs", wait_s + 0.2)
+                await asyncio.sleep(wait_s + 0.2)
                 continue
-            collected += line + "\n"
-            if line.lstrip().startswith("error "):
-                break
+            return collected.strip()
         return collected.strip()
 
     async def _wait_for_notify(self, timeout: float = 30) -> str | None:

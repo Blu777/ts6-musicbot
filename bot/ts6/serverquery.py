@@ -86,23 +86,40 @@ class ServerQueryClient:
 
     # ── Low-level RPC ──────────────────────────────────────────────────────
 
-    async def _cmd_locked(self, command: str, timeout: float = 10) -> str:
+    async def _cmd_locked(self, command: str, timeout: float = 10,
+                          flood_retries: int = 3) -> str:
+        """Send a command and wait for `error id=...`. Auto-retries on 524 flood."""
         async with self._lock:
             if not self._transport:
                 raise RuntimeError("ServerQueryClient not started")
-            self._transport.drain_buffer()
-            self._transport.send_line(command)
-            collected = ""
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + timeout
-            while True:
-                remaining = max(0.05, deadline - loop.time())
-                line = await self._transport.read_line(timeout=remaining)
-                if line is None:
-                    break
-                collected += line + "\n"
-                if line.lstrip().startswith("error "):
-                    break
+            for attempt in range(flood_retries + 1):
+                self._transport.drain_buffer()
+                self._transport.send_line(command)
+                collected = ""
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + timeout
+                error_line = ""
+                while True:
+                    remaining = max(0.05, deadline - loop.time())
+                    line = await self._transport.read_line(timeout=remaining)
+                    if line is None:
+                        break
+                    collected += line + "\n"
+                    if line.lstrip().startswith("error "):
+                        error_line = line
+                        break
+                if "error id=524" in error_line and attempt < flood_retries:
+                    wait_s = 1.0
+                    for tok in error_line.split():
+                        if tok.startswith("extra_msg=please\\swait\\s"):
+                            try:
+                                wait_s = float(tok.split("\\s")[2])
+                            except (ValueError, IndexError):
+                                pass
+                    log.info("Flood protection hit, retrying in %.1fs", wait_s + 0.2)
+                    await asyncio.sleep(wait_s + 0.2)
+                    continue
+                return collected.strip()
             return collected.strip()
 
     # ── Read operations ────────────────────────────────────────────────────
