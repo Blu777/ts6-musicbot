@@ -148,33 +148,62 @@ docker compose logs -f 2>&1 | grep -Ev "chromium|dbus|gcm|registration_request"
 
 > Requiere Docker habilitado (default en SCALE 24.10+, reemplaza al antiguo k3s).
 
-### Layout recomendado
+**Usamos la imagen pre-compilada de `ghcr.io`** — no hace falta clonar el repo ni compilar en la NAS. Primer arranque ~15 s.
+
+### Layout
 
 ```
-/mnt/<pool>/apps/ts6-musicbot/
-├── build/                      # código + teamspeak-client.tar.gz + .env
-└── data/                       # persistencia (cache + identidad TS6)
+/mnt/<pool>/apps/teamspeak-music/
+└── data/
+    ├── teamspeak-client.tar.gz   ← lo pones vos (propietario, no redistribuible)
+    ├── .env                      ← configuración
+    ├── cache/                    ← se crea solo
+    └── ts6-config/               ← se crea solo (identidad del cliente TS6)
 ```
 
 ### Pasos
 
-1. **Crea los datasets** en TrueNAS:
-   - `apps/ts6-musicbot`
-   - `apps/ts6-musicbot/build`
-   - `apps/ts6-musicbot/data`
+1. **Crea el dataset** `apps/teamspeak-music/data` en TrueNAS.
+   - Permissions Editor → Owner `apps`, Group `apps`, Apply recursively.
 
-2. **Sube el código** a `build/`:
-   - Clona este fork, o descarga un zip y expándelo en `build/`.
-   - Coloca `teamspeak-client.tar.gz` en `build/`.
-   - Copia `build/.env.example` a `build/.env` y completa los valores.
+2. **Sube a ese dataset** (por SSH, SMB o SFTP):
+   - `teamspeak-client.tar.gz` — Linux 64-bit, desde https://teamspeak.com/en/downloads/#client
+   - `.env` — copiado de [`.env.example`](./.env.example) con tus credenciales
 
-3. **Ajusta los paths** en `docker-compose.truenas.yml` (líneas marcadas con
-   `⚠️ ajusta`) al nombre real de tu pool.
+3. **Crea la Custom App** en TrueNAS:
+   - Apps → Discover Apps → **Custom App**
+   - Application Name: `teamspeak-music`
+   - Custom Config: pegá el contenido de [`docker-compose.truenas.yml`](./docker-compose.truenas.yml)
+     ajustando los dos paths marcados con `⚠️ ajusta` a tu pool.
+   - Install.
 
-4. En TrueNAS SCALE → **Apps → Discover Apps → Custom App** →
-   pega el contenido de `docker-compose.truenas.yml`. Launch.
+4. **Verifica**:
+   ```bash
+   sudo docker logs -f ts6-musicbot
+   ```
+   Deberías ver:
+   ```
+   [entrypoint] First run — extracting TS6 client from /data/teamspeak-client.tar.gz
+   [bootstrap] Starting PulseAudio...
+   [main] Bot started. Channel: ...
+   [chat_listener] ChatListener ready — waiting for messages in ...
+   ```
 
-5. Verifica con `docker logs -f ts6-musicbot`.
+### Actualizar
+
+```bash
+# En la UI de TrueNAS: Apps → teamspeak-music → Edit → Save
+# (con pull_policy: always, tira la imagen nueva automáticamente)
+```
+
+O fija un tag concreto (ej: `ghcr.io/blu777/ts6-musicbot:v1.0.0`) para
+producción, y actualizá cambiando el tag en el compose.
+
+### Build local alternativo
+
+Si preferís compilar desde fuente en la NAS (ej: para hackear código), cloná
+el repo en `apps/teamspeak-music/build/`, poné el tarball ahí, y usá el
+[`docker-compose.yml`](./docker-compose.yml) genérico en lugar del de ghcr.io.
 
 ### Notas específicas de TrueNAS
 

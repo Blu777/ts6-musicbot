@@ -42,17 +42,29 @@ RUN apt-get update && apt-get install -y \
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp
 
-# TeamSpeak 6 client from local tar.gz
-# ── Versión verificada ────────────────────────────────────────────────────────
-# Archivo: teamspeak-client.tar.gz  (excluido del repo por tamaño, 183 MB)
-# SHA-256: b9ba408a0b58170ce32384fc8bba56800840d694bd310050cbadd09246d4bf27
-# Fuente:  https://teamspeak.com/en/downloads/#client  (Linux, 64-bit)
+# ── Cliente TeamSpeak 6 ──────────────────────────────────────────────────────
+# El binario es propietario (EULA de TeamSpeak Systems) y NO se redistribuye
+# en esta imagen. El usuario debe colocar teamspeak-client.tar.gz en el volumen
+# /data antes del primer arranque. El entrypoint lo detecta y lo extrae a
+# /opt/ts6 en el primer run (idempotente).
+#
+# Si existe teamspeak-client.tar.gz al lado del Dockerfile durante `docker build`,
+# se incluye igualmente — útil para builds locales que no quieren tocar /data.
 # ─────────────────────────────────────────────────────────────────────────────
-COPY teamspeak-client.tar.gz /tmp/ts6client.tar.gz
-RUN mkdir -p /opt/ts6 \
-    && tar -xzf /tmp/ts6client.tar.gz -C /opt/ts6 --no-same-permissions --no-same-owner \
-    && rm /tmp/ts6client.tar.gz \
-    && chmod +x /opt/ts6/TeamSpeak
+RUN mkdir -p /opt/ts6 /tmp/ts6src
+# NOTICE.md is included as a "guaranteed sibling" so the glob always matches
+# at least one file — otherwise buildkit errors when teamspeak-client.tar.gz
+# is absent (public builds for ghcr.io / Docker Hub).
+COPY teamspeak-client.tar.gz* NOTICE.md /tmp/ts6src/
+RUN if [ -f /tmp/ts6src/teamspeak-client.tar.gz ]; then \
+        tar -xzf /tmp/ts6src/teamspeak-client.tar.gz -C /opt/ts6 \
+            --no-same-permissions --no-same-owner \
+        && chmod +x /opt/ts6/TeamSpeak \
+        && echo "[build] TS6 baked into image"; \
+    else \
+        echo "[build] No TS6 tarball bundled — will extract from /data at runtime"; \
+    fi \
+    && rm -rf /tmp/ts6src
 
 # Create non-root user `musicbot` (UID/GID can be remapped at runtime via
 # PUID/PGID env vars, TrueNAS-style). We use --no-sandbox for TS6 so we

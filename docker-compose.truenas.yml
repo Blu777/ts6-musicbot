@@ -1,23 +1,29 @@
 # TrueNAS SCALE 24.10+ (Electric Eel / Fangtooth) "Custom App" compose file.
 #
-# 1. En TrueNAS crea el dataset parent: /mnt/<pool>/apps/ts6-musicbot
-#    con dos subdirectorios: data/ y build/ (o clona el repo en build/).
-# 2. Descarga teamspeak-client.tar.gz (Linux 64-bit) y pégalo en build/.
-# 3. Copia .env.example → build/.env y complétalo.
-# 4. Ajusta abajo el path al dataset (MNT_PATH) y tu PUID/PGID (por defecto
-#    TrueNAS usa el usuario "apps" con UID 568).
-# 5. Apps → Discover Apps → Custom App → pega este archivo.
+# Este compose PULLEA la imagen ya construida desde ghcr.io — NO hace build
+# local. Mucho más rápido: primer arranque ~15 s en vez de 2-5 min.
 #
-# Documentación: https://www.truenas.com/docs/scale/24.10/scaletutorials/apps/usingcustomapp/
+# Preparación previa (una sola vez por NAS):
+#   1. En TrueNAS, crea el dataset /mnt/<pool>/apps/teamspeak-music/data
+#      (con permisos para el usuario "apps", UID 568).
+#   2. Descarga el cliente TS6 Linux 64-bit desde
+#        https://teamspeak.com/en/downloads/#client
+#      y colócalo como:
+#        /mnt/<pool>/apps/teamspeak-music/data/teamspeak-client.tar.gz
+#      (el container lo extrae en el primer arranque).
+#   3. Crea /mnt/<pool>/apps/teamspeak-music/data/.env con las variables que
+#      están en .env.example del repo (TS_SERVER_HOST, TS_QUERY_PASSWORD, etc).
+#   4. Ajusta los paths `/mnt/HMS/...` de abajo a tu pool.
+#   5. Apps → Discover Apps → Custom App → pega este archivo.
 
 services:
   ts6-musicbot:
-    build: /mnt/tank/apps/ts6-musicbot/build  # ⚠️ ajusta al path de tu pool
-    image: ts6-musicbot:latest
+    image: ghcr.io/blu777/ts6-musicbot:latest
     container_name: ts6-musicbot
     restart: unless-stopped
+    pull_policy: always   # jala 'latest' en cada deploy; usá un tag fijo (vX.Y.Z) para producción
 
-    env_file: /mnt/tank/apps/ts6-musicbot/build/.env   # ⚠️ ajusta
+    env_file: /mnt/HMS/teamspeak-music/data/.env   # ⚠️ ajusta al path real
 
     environment:
       - DISPLAY=:99
@@ -29,9 +35,7 @@ services:
       - AUTO_UPDATE_YT_DLP=1
 
     volumes:
-      - /mnt/tank/apps/ts6-musicbot/data:/data   # ⚠️ ajusta
-
-    # No /dev/snd, no cap_add: SYS_ADMIN — el audio es 100% virtual.
+      - /mnt/HMS/teamspeak-music/data:/data   # ⚠️ ajusta al path real
 
     healthcheck:
       test: ["CMD", "python3", "/app/bot/healthcheck.py"]
@@ -40,7 +44,6 @@ services:
       retries: 3
       start_period: 60s
 
-    # Recursos (opcional, recomendado en NAS compartido)
     deploy:
       resources:
         limits:

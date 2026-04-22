@@ -22,8 +22,28 @@ fi
 # ── Prepare data directories ─────────────────────────────────────────────────
 AUDIO_CACHE_DIR="${AUDIO_CACHE_DIR:-/data/cache}"
 TS6_CONFIG_DIR="${TS6_CONFIG_DIR:-/data/ts6-config}"
-mkdir -p "$AUDIO_CACHE_DIR" "$TS6_CONFIG_DIR" /tmp/pulse /var/log/musicbot
+mkdir -p "$AUDIO_CACHE_DIR" "$TS6_CONFIG_DIR" /tmp/pulse /var/log/musicbot /opt/ts6
 chown -R musicbot:musicbot "$AUDIO_CACHE_DIR" "$TS6_CONFIG_DIR" /tmp/pulse /var/log/musicbot
+
+# ── Extract TS6 client from /data if the image doesn't already include it ────
+# The proprietary binary is NOT shipped in public images. On first boot we look
+# for /data/teamspeak-client.tar.gz and extract it to /opt/ts6/.
+if [ ! -x /opt/ts6/TeamSpeak ]; then
+    if [ -f /data/teamspeak-client.tar.gz ]; then
+        echo "[entrypoint] First run — extracting TS6 client from /data/teamspeak-client.tar.gz"
+        tar -xzf /data/teamspeak-client.tar.gz -C /opt/ts6 \
+            --no-same-permissions --no-same-owner
+        chmod +x /opt/ts6/TeamSpeak
+        echo "[entrypoint] TS6 client extracted to /opt/ts6/"
+    else
+        echo "[entrypoint] FATAL: TS6 client not found."
+        echo "[entrypoint] Download the Linux 64-bit client from"
+        echo "[entrypoint]   https://teamspeak.com/en/downloads/#client"
+        echo "[entrypoint] and place it as /data/teamspeak-client.tar.gz"
+        echo "[entrypoint] (host path: <your-data-mount>/teamspeak-client.tar.gz)."
+        exit 1
+    fi
+fi
 
 # TS6 client reads its config from $HOME/.config/TeamSpeak by default.
 # We point $HOME at the persistent dir and symlink the config.
