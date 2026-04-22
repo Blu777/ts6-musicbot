@@ -198,11 +198,33 @@ class AudioPlayer:
         #  - Pulse sink underruns if the TS6 encoder grabs late
         # Configurable via AUDIO_BUFFER_MS (default 10s).
         buffer_ms = os.getenv("AUDIO_BUFFER_MS", "10000")
+
+        # Anti-VAD trick: mix in ~-72 dB of white noise so the TS6 client's
+        # Voice Activity Detection always sees energy and doesn't gate music
+        # passages as silence. Totally inaudible to humans (below the noise
+        # floor of most speakers), but keeps the Opus transmission continuous.
+        # Disable with AUDIO_ANTI_VAD=0 if you want to A/B test.
+        anti_vad = os.getenv("AUDIO_ANTI_VAD", "1") != "0"
+        if anti_vad:
+            filter_args = [
+                "-filter_complex",
+                # Generate mono white noise at gain 0.00025 (~-72 dB), upmix to
+                # stereo (pan=stereo|c0=c0|c1=c0), then mix with the track.
+                # Total output level ≈ track level (noise is -72 dB below).
+                "anoisesrc=color=white:amplitude=0.00025:sample_rate=48000,"
+                "pan=stereo|c0=c0|c1=c0[noise];"
+                "[0:a][noise]amix=inputs=2:duration=first:normalize=0[out]",
+                "-map", "[out]",
+            ]
+        else:
+            filter_args = []
+
         cmd = [
             "ffmpeg",
             "-loglevel", "warning",
             *extra_input_flags,
             "-i", source,
+            *filter_args,
             # float32 matches PulseAudio sink, SoX resampler
             "-acodec", "pcm_f32le",
             "-ar", "48000",

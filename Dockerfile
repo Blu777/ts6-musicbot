@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y \
     libgbm1 \
     libasound2t64 \
     libnotify4 \
+    sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp (latest from GitHub). Will be further upgraded at container start
