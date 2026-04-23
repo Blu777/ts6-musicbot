@@ -88,7 +88,11 @@ RUN usermod -a -G audio,pulse,pulse-access musicbot 2>/dev/null || true
 WORKDIR /app
 
 COPY bot/requirements.txt .
-RUN pip3 install --break-system-packages -r requirements.txt
+# --ignore-installed: algunas deps apt (python3-typing-extensions vía
+# websockify/novnc) no tienen RECORD file, y pip no puede desinstalarlas
+# para actualizar. Este flag le dice a pip que ponga sus versiones en
+# /usr/local/ y las deje tener precedencia en sys.path.
+RUN pip3 install --break-system-packages --ignore-installed -r requirements.txt
 
 COPY bot/ ./bot/
 COPY scripts/ ./scripts/
