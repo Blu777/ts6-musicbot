@@ -17,6 +17,14 @@ jobs:
       contents: read
       packages: write
 
+    # Surface optional Docker Hub credentials at the job level so that a step's
+    # `if:` can read them via the `env` context. Step-level `env:` is NOT in
+    # scope for that same step's own `if:` expression, which is why this has
+    # to live here rather than on the login step.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
     steps:
       - uses: actions/checkout@v5
 
@@ -35,11 +43,7 @@ jobs:
 
       - name: Log in to Docker Hub
         # Only tries if the secrets are set (keeps the workflow green on forks).
-        # NOTE: `secrets.*` cannot be used inside an `if:` expression, so we
-        # surface them as env vars and check those instead.
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        # The env vars are populated at the job level above.
         if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v4
         with:

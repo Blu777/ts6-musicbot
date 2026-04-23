@@ -31,12 +31,92 @@ import time
 log = logging.getLogger("ts6_patch_audio")
 
 # Values we enforce on every capture device's preprocessor block.
+# Only VAD and AGC — denoise and typing-suppression are left as-is so the
+# user can tune them from the TS6 UI without this script reverting their
+# choice on every boot.
 PREPROC_OVERRIDES: dict[str, object] = {
     "vad": False,
     "agc": False,
-    "denoise": False,
-    "typingSuppression": False,
 }
+
+# Full preprocessor block used when *creating* a new audio_settings row.
+# Mirrors the shape the TS6 client writes itself (see Windows settings.db)
+# with VAD and AGC off; denoise/typing-suppression keep TS6 defaults.
+_CLEAN_PREPROC: dict[str, object] = {
+    "agc": False,
+    "denoise": True,
+    "denoiserLevel": 1,
+    "typingSuppression": False,
+    "vad": False,
+    "vadMode": 0,
+    "vadLevel": -30,
+}
+
+
+def _default_audio_settings(sink_name: str) -> dict:
+    """Build a minimal audio_settings blob for the headless Linux bot.
+
+    The TS6 Linux client enumerates PulseAudio devices at startup. When it
+    finds a device that matches an `id` already stored here, it applies
+    the stored preprocessor config — giving us a way to force VAD/AGC off
+    even though we can't open the UI.
+
+    We seed a handful of plausible PulseAudio ids for the virtual sink /
+    monitor / mic pair the bootstrap creates, under a few likely backend
+    names ("PulseAudio", "PipeWire") so at least one matches whatever the
+    client actually uses.
+    """
+    mic_variants = [
+        (f"{sink_name}.mic", f"{sink_name}.mic",
+         "MusicBot virtual microphone"),
+        (f"{sink_name}.monitor", f"{sink_name}.monitor",
+         "Monitor of MusicBot virtual sink"),
+    ]
+
+    def _capture_device(dev_id: str, dev_name: str, desc: str) -> list:
+        return [
+            {
+                "id": dev_id,
+                "name": dev_name,
+                "description": desc,
+                "interfaceName": "PulseAudio",
+                "formFactor": 2,  # 2 = capture
+            },
+            dict(_CLEAN_PREPROC),
+        ]
+
+    capture_entries = [_capture_device(i, n, d) for i, n, d in mic_variants]
+
+    return {
+        "0": {
+            "mode": "",
+            "device": {
+                "id": "musicbot_deaf",
+                "name": "musicbot_deaf",
+                "description": "MusicBot deaf sink (playback disabled)",
+                "interfaceName": "PulseAudio",
+                "formFactor": 1,  # 1 = render
+            },
+            "devices": {
+                "PulseAudio": [],
+            },
+            "ptt": None,
+        },
+        "1": {
+            "mode": "",
+            "device": capture_entries[0][0],  # select the .mic variant
+            "devices": {
+                "PulseAudio": capture_entries,
+                # Some TS6 builds label the backend differently — duplicate
+                # under PipeWire to cover both cases. Harmless if unused.
+                "PipeWire": list(capture_entries),
+            },
+            "ptt": {
+                "active": False,
+                "releaseDelay": {"active": False, "ms": 300},
+            },
+        },
+    }
 
 
 def _patch_preproc(preproc: dict) -> bool:
@@ -109,12 +189,30 @@ def patch(db_path: str) -> int:
             "SELECT value FROM json_blobs WHERE key='audio_settings'"
         )
         row = cur.fetchone()
+
+        sink_name = os.environ.get("PULSE_SINK_NAME", "musicbot_sink")
+        now = int(time.time())
+
         if not row:
-            log.info(
-                "audio_settings row not present yet — skipping "
-                "(TS6 client has not initialized audio config)"
+            # TS6 headless never wrote audio_settings on its own. Inject a
+            # minimal one with VAD/AGC/denoise off so the client picks it up
+            # on its next startup.
+            data = _default_audio_settings(sink_name)
+            new_value = json.dumps(
+                data, separators=(",", ":"), ensure_ascii=False
             )
-            return 0
+            cur.execute(
+                "INSERT INTO json_blobs (timestamp, key, value) "
+                "VALUES (?, 'audio_settings', ?)",
+                (now, new_value),
+            )
+            conn.commit()
+            log.info(
+                "Inserted new audio_settings blob with VAD/AGC off for "
+                "sink '%s' (other preprocessor flags left at TS6 defaults)",
+                sink_name,
+            )
+            return 1
 
         try:
             data = json.loads(row[0])
@@ -134,7 +232,7 @@ def patch(db_path: str) -> int:
         new_value = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
         cur.execute(
             "UPDATE json_blobs SET value=?, timestamp=? WHERE key='audio_settings'",
-            (new_value, int(time.time())),
+            (new_value, now),
         )
         conn.commit()
         log.info("Patched %d preprocessor block(s): %s",
