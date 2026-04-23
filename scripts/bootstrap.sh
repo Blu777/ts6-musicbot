@@ -67,6 +67,8 @@ echo "[bootstrap] PulseAudio socket: ${PULSE_SOCKET} (sink ${PULSE_SINK_NAME} pr
 #   NOVNC_PORT        : HTTP port for noVNC (default 6080)
 #   XVFB_SCREEN       : bumped automatically to 1280x800x24 when VNC is on,
 #                       unless you override it explicitly
+#   TS6_WINDOW_SIZE   : TS6 client window size (same default as Xvfb when VNC
+#                       is on; override via env var e.g. "1920x1080")
 if [ "${VNC_ENABLED:-0}" = "1" ] || [ -n "${VNC_PASSWORD:-}" ]; then
     if [ -z "${VNC_PASSWORD:-}" ]; then
         echo "[bootstrap] WARNING: VNC_ENABLED=1 but VNC_PASSWORD is empty."

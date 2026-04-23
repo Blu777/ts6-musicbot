@@ -17,6 +17,21 @@ echo "[ts6] Connecting to: $CONNECT_URI"
 # Electron flags to minimise CPU usage. The TS6 client is a Chromium app and
 # by default eats ~1+ CPU on a headless server doing nothing. Disabling GPU
 # paths, background work, animations and telemetry can easily halve the load.
+#
+# TS6_WINDOW_SIZE: "WxH" tamaño de la ventana del cliente. Por default 320x240
+# (ahorro máximo) cuando VNC está off, 1280x800 cuando VNC está on para que
+# la UI sea usable. Podés overridear con ej TS6_WINDOW_SIZE=1920x1080.
+if [ -z "${TS6_WINDOW_SIZE:-}" ]; then
+    if [ "${VNC_ENABLED:-0}" = "1" ] || [ -n "${VNC_PASSWORD:-}" ]; then
+        TS6_WINDOW_SIZE="1280x800"
+    else
+        TS6_WINDOW_SIZE="320x240"
+    fi
+fi
+# Convertir WxH → W,H para el flag de Chromium
+_TS6_WIN_CHROMIUM="${TS6_WINDOW_SIZE/x/,}"
+echo "[ts6] Window size: ${TS6_WINDOW_SIZE}"
+
 ELECTRON_FLAGS=(
     --no-sandbox
     --disable-gpu
@@ -36,7 +51,7 @@ ELECTRON_FLAGS=(
     --metrics-recording-only
     --mute-audio
     --no-first-run
-    --window-size=320,240
+    --window-size="${_TS6_WIN_CHROMIUM}"
     # Cap V8 heap → smaller / quicker garbage collections, shorter GC pauses
     --js-flags=--max-old-space-size=256
 )
