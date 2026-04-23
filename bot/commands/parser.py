@@ -2,9 +2,9 @@
 Chat command dispatcher.
 
 Commands (channel chat only):
-  !play <query|URL>    Enqueue track and start playback
+  !play  (!p)          Enqueue track and start playback
   !playlist <URL>      Enqueue a playlist (capped at MAX_PLAYLIST_ITEMS)
-  !skip                Skip current track
+  !skip  (!s)          Skip current track
   !stop                Clear queue and stop playback
   !pause               Pause current track
   !resume              Resume paused track
@@ -18,6 +18,7 @@ Commands (channel chat only):
 """
 
 import logging
+import os
 
 from audio.player import AudioPlayer
 from audio.resolver import download_track, resolve, resolve_playlist
@@ -26,6 +27,12 @@ from ts6.webquery import WebQueryClient
 log = logging.getLogger(__name__)
 
 BOT_NICKNAME: str | None = None
+
+# CHAT_VERBOSE=1 restaura los mensajes intermedios de !play:
+#   "Encontrado: ..." + "Descargando: 25/50/75/100%".
+# Por default (0) el bot solo anuncia "Buscando..." y la confirmacion
+# final "[pos] title - pedido por sender".
+_CHAT_VERBOSE = os.getenv("CHAT_VERBOSE", "0") != "0"
 
 
 def _fmt_duration(seconds: int) -> str:
@@ -56,8 +63,10 @@ class CommandParser:
 
         handlers = {
             "!play": self._cmd_play,
+            "!p": self._cmd_play,           # alias corto de !play
             "!playlist": self._cmd_playlist,
             "!skip": self._cmd_skip,
+            "!s": self._cmd_skip,           # alias corto de !skip
             "!stop": self._cmd_stop,
             "!pause": self._cmd_pause,
             "!resume": self._cmd_resume,
@@ -96,19 +105,24 @@ class CommandParser:
             return
 
         dur = _fmt_duration(track["duration"])
-        await self.ts.send_channel_message(
-            f"Encontrado: {track['title']} ({dur}) — descargando..."
-        )
+        if _CHAT_VERBOSE:
+            await self.ts.send_channel_message(
+                f"Encontrado: {track['title']} ({dur}) — descargando..."
+            )
 
-        last_sent = [0]
+        progress_cb = None
+        if _CHAT_VERBOSE:
+            last_sent = [0]
 
-        async def on_progress(pct: int) -> None:
-            if pct - last_sent[0] >= 25 or pct == 100:
-                last_sent[0] = pct
-                await self.ts.send_channel_message(f"Descargando: {pct}%")
+            async def on_progress(pct: int) -> None:
+                if pct - last_sent[0] >= 25 or pct == 100:
+                    last_sent[0] = pct
+                    await self.ts.send_channel_message(f"Descargando: {pct}%")
+
+            progress_cb = on_progress
 
         try:
-            local_path = await download_track(track, on_progress)
+            local_path = await download_track(track, progress_cb)
             track = {**track, "local_path": local_path}
         except Exception as e:
             log.warning("Download failed for %s: %s — will stream instead", track["title"], e)
@@ -235,6 +249,7 @@ class CommandParser:
 
     async def _cmd_help(self, sender: str, _: str) -> None:
         await self.ts.send_channel_message(
-            "Comandos: !play <q> | !playlist <url> | !skip | !stop | !pause | !resume "
-            "| !shuffle | !clear | !queue | !np | !vol <n> | !move <canal> | !help"
+            "Comandos: !play (!p) <q> | !playlist <url> | !skip (!s) | !stop "
+            "| !pause | !resume | !shuffle | !clear | !queue | !np | !vol <n> "
+            "| !move <canal> | !help"
         )

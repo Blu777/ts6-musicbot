@@ -35,6 +35,7 @@ services:
       - TS6_CONFIG_DIR=/data/ts6-config
       - LOG_LEVEL=INFO                         # DEBUG | INFO | WARNING | ERROR
       - AUTO_UPDATE_YT_DLP=1                   # 1 = actualiza yt-dlp al arrancar
+      - CHAT_VERBOSE=0                         # 1 = loggea progreso de descarga al chat
 
       # ── Servidor TeamSpeak 6 ──────────────────────────────────────────────
       - TS_SERVER_HOST=tu-servidor.cl          # CAMBIAR

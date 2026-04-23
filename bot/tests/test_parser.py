@@ -101,6 +101,62 @@ async def test_skip_delegates(setup):
 
 
 @pytest.mark.asyncio
+async def test_play_alias_p(setup):
+    """!p must behave exactly like !play."""
+    parser, player, ts = setup
+    with patch("commands.parser.resolve", AsyncMock(return_value=TRACK)), \
+         patch("commands.parser.download_track", AsyncMock(return_value="/tmp/x.m4a")):
+        await parser.handle("alice", "!p rick astley")
+    player.enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_skip_alias_s(setup):
+    """!s must behave exactly like !skip."""
+    parser, player, ts = setup
+    await parser.handle("alice", "!s")
+    player.skip.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_play_default_is_quiet(setup):
+    """With CHAT_VERBOSE=0 (default), only 2 messages: Buscando + confirmacion."""
+    parser, player, ts = setup
+    with patch("commands.parser._CHAT_VERBOSE", False), \
+         patch("commands.parser.resolve", AsyncMock(return_value=TRACK)), \
+         patch("commands.parser.download_track", AsyncMock(return_value="/tmp/x.m4a")):
+        await parser.handle("alice", "!play rick astley")
+    sent = [c.args[0] for c in ts.send_channel_message.await_args_list]
+    # No intermediate "Encontrado" / "Descargando" chatter in default mode
+    assert not any("Descargando" in s for s in sent), sent
+    assert not any("Encontrado" in s for s in sent), sent
+    # Start + confirmation still present
+    assert any(s.startswith("Buscando:") for s in sent), sent
+    assert any(s.startswith("[") and "pedido por" in s for s in sent), sent
+
+
+@pytest.mark.asyncio
+async def test_play_verbose_includes_progress(setup):
+    """With CHAT_VERBOSE=1, 'Encontrado' + progress callbacks are emitted."""
+    parser, player, ts = setup
+
+    async def fake_download(track, progress_cb):
+        # Simulate yt-dlp firing progress ticks
+        if progress_cb:
+            for pct in (25, 50, 75, 100):
+                await progress_cb(pct)
+        return "/tmp/x.m4a"
+
+    with patch("commands.parser._CHAT_VERBOSE", True), \
+         patch("commands.parser.resolve", AsyncMock(return_value=TRACK)), \
+         patch("commands.parser.download_track", side_effect=fake_download):
+        await parser.handle("alice", "!play rick astley")
+    sent = [c.args[0] for c in ts.send_channel_message.await_args_list]
+    assert any("Encontrado" in s for s in sent), sent
+    assert any("Descargando: 100%" in s for s in sent), sent
+
+
+@pytest.mark.asyncio
 async def test_stop_delegates(setup):
     parser, player, ts = setup
     await parser.handle("alice", "!stop")
