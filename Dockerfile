@@ -5,12 +5,18 @@ ENV DISPLAY=:99
 # PULSE_SERVER is set at runtime in entrypoint.sh after PulseAudio starts
 ENV PYTHONUNBUFFERED=1
 
+# x11vnc / novnc / websockify → optional remote desktop (off by default,
+# enabled at runtime via VNC_ENABLED=1). Lets you connect to the TS6
+# client UI to configure audio settings, VAD/AGC, pick devices, etc.
 RUN apt-get update && apt-get install -y \
     pulseaudio \
     pulseaudio-utils \
     xvfb \
     x11-utils \
     xdotool \
+    x11vnc \
+    novnc \
+    websockify \
     ffmpeg \
     python3 \
     python3-pip \

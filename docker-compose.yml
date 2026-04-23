@@ -15,6 +15,18 @@ services:
       - TS6_CONFIG_DIR=/data/ts6-config
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - AUTO_UPDATE_YT_DLP=${AUTO_UPDATE_YT_DLP:-1}
+      # Optional: remote desktop to configure the TS6 client by hand.
+      # Set VNC_ENABLED=1 and VNC_PASSWORD=<strong-password> in your .env.
+      - VNC_ENABLED=${VNC_ENABLED:-0}
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
+      - NOVNC_ENABLED=${NOVNC_ENABLED:-0}
+
+    # VNC ports (nothing listens inside the container unless VNC_ENABLED=1,
+    # so these are harmless when VNC is off). Comment out if you want to be
+    # extra paranoid, or bind to 127.0.0.1: only.
+    ports:
+      - "${VNC_BIND:-127.0.0.1}:5900:5900"    # raw VNC (TigerVNC/RealVNC/etc)
+      - "${VNC_BIND:-127.0.0.1}:6080:6080"    # noVNC web client (NOVNC_ENABLED=1)
 
     volumes:
       - ts6_data:/data

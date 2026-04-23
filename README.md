@@ -156,25 +156,28 @@ docker compose logs -f 2>&1 | grep -Ev "chromium|dbus|gcm|registration_request"
 /mnt/<pool>/apps/teamspeak-music/
 └── data/
     ├── teamspeak-client.tar.gz   ← lo pones vos (propietario, no redistribuible)
-    ├── .env                      ← configuración
     ├── cache/                    ← se crea solo
     └── ts6-config/               ← se crea solo (identidad del cliente TS6)
 ```
+
+> **Nota:** TrueNAS Custom App **no soporta archivos `.env` externos**. Toda
+> la configuración (credenciales del server TS6, WebQuery, etc.) va
+> **inline** en el compose YAML que pegás en la UI.
 
 ### Pasos
 
 1. **Crea el dataset** `apps/teamspeak-music/data` en TrueNAS.
    - Permissions Editor → Owner `apps`, Group `apps`, Apply recursively.
 
-2. **Sube a ese dataset** (por SSH, SMB o SFTP):
+2. **Sube el tarball** a ese dataset (por SSH, SMB o SFTP):
    - `teamspeak-client.tar.gz` — Linux 64-bit, desde https://teamspeak.com/en/downloads/#client
-   - `.env` — copiado de [`.env.example`](./.env.example) con tus credenciales
 
 3. **Crea la Custom App** en TrueNAS:
    - Apps → Discover Apps → **Custom App**
    - Application Name: `teamspeak-music`
    - Custom Config: pegá el contenido de [`docker-compose.truenas.yml`](./docker-compose.truenas.yml)
-     ajustando los dos paths marcados con `⚠️ ajusta` a tu pool.
+     y editá **antes de Install** todas las variables marcadas con `# CAMBIAR`
+     (TS_SERVER_HOST, TS_WEBQUERY_APIKEY, TS_QUERY_PASSWORD, path del volumen, etc).
    - Install.
 
 4. **Verifica**:
@@ -218,6 +221,64 @@ el repo en `apps/teamspeak-music/build/`, poné el tarball ahí, y usá el
   "unhealthy", mira el log del healthcheck dentro del contenedor.
 - **Primer arranque** puede tardar ~1 min (pip install del requirements + pull
   de `yt-dlp` latest). `start_period: 60s` ya está considerando esto.
+
+---
+
+## Configurar el cliente TS6 a mano (VNC)
+
+El cliente TS6 corre headless sobre un `Xvfb` virtual — no hay pantalla por
+defecto. Si querés abrir la UI para toquetear opciones de audio (VAD/AGC,
+elegir device de captura, aceptar EULAs, etc.) tenés un servidor VNC
+opcional adentro del contenedor.
+
+### Encenderlo
+
+En tu `.env`:
+
+```bash
+VNC_ENABLED=1
+VNC_PASSWORD=una-clave-fuerte   # obligatorio
+NOVNC_ENABLED=1                 # opcional: UI web en :6080/vnc.html
+VNC_BIND=127.0.0.1              # default: solo localhost del host
+```
+
+Recreá el contenedor para que tome los cambios:
+
+```bash
+docker compose up -d
+```
+
+### Cómo conectarse
+
+**Opción A — VNC nativo por SSH tunnel (recomendado):**
+
+```bash
+ssh -L 5900:localhost:5900 usuario@tu-servidor
+# Desde tu máquina, abrí un viewer (TigerVNC, RealVNC, macOS Screen Sharing)
+# apuntando a: vnc://localhost:5900  con el VNC_PASSWORD que pusiste.
+```
+
+**Opción B — noVNC (navegador, requiere `NOVNC_ENABLED=1`):**
+
+```bash
+ssh -L 6080:localhost:6080 usuario@tu-servidor
+# En tu navegador: http://localhost:6080/vnc.html
+```
+
+**Opción C — Exponer a la LAN (CUIDADO):** en `.env` poné `VNC_BIND=0.0.0.0`
+y abrí `:5900` / `:6080` en el firewall. **Usá una contraseña fuerte** —
+x11vnc usa auth VNC clásico que es débil contra ataques de fuerza bruta.
+
+### Resolución de la pantalla
+
+Cuando VNC está on, `Xvfb` se levanta en `1280x800x24` automáticamente.
+Override con `XVFB_SCREEN=1920x1080x24` en `.env` si necesitás algo
+diferente. Con VNC off vuelve a `320x240x16` (mínima huella de RAM/CPU).
+
+### Apagarlo
+
+Poné `VNC_ENABLED=0` (o borralo) en `.env` y `docker compose up -d`.
+`x11vnc`, `novnc` y `Xvfb` vuelven al modo ahorro.
 
 ---
 

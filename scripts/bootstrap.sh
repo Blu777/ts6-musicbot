@@ -7,8 +7,17 @@ echo "[bootstrap] Running as $(id)"
 
 echo "[bootstrap] Starting Xvfb on :99..."
 # Tiny resolution + 16bpp → Xvfb uses 10x less RAM and CPU. The bot has no
-# real UI interaction, so we don't need a big framebuffer.
-Xvfb :99 -screen 0 "${XVFB_SCREEN:-320x240x16}" -nolisten tcp &
+# real UI interaction, so we don't need a big framebuffer. When VNC is on
+# we bump to a usable desktop size automatically (overrideable via XVFB_SCREEN).
+if [ -z "${XVFB_SCREEN:-}" ]; then
+    if [ "${VNC_ENABLED:-0}" = "1" ] || [ -n "${VNC_PASSWORD:-}" ]; then
+        XVFB_SCREEN="1280x800x24"
+    else
+        XVFB_SCREEN="320x240x16"
+    fi
+fi
+echo "[bootstrap] Xvfb screen size: ${XVFB_SCREEN}"
+Xvfb :99 -screen 0 "${XVFB_SCREEN}" -nolisten tcp &
 XVFB_PID=$!
 sleep 1
 
@@ -46,48 +55,48 @@ if ! pactl list short sinks 2>/dev/null | grep -q "^[0-9]*[[:space:]]\+${PULSE_S
 fi
 echo "[bootstrap] PulseAudio socket: ${PULSE_SOCKET} (sink ${PULSE_SINK_NAME} present)"
 
-# ── Disable VAD / AGC / denoise in TS6 client ──────────────────────────────
-# The TS6 desktop client stores its audio preprocessor config inside
-# settings.db (json_blobs.audio_settings). We want raw pass-through of the
-# music stream: no voice-activity gating, no AGC, no denoise.
+# ── Optional: remote desktop (VNC) for configuring the TS6 client by hand ──
+# When VNC_ENABLED=1 (or a VNC_PASSWORD is set), expose the Xvfb display :99
+# over VNC so you can point a viewer at the container and interact with the
+# TS6 UI (e.g. to toggle VAD/AGC, pick devices, accept EULAs, etc).
 #
-# The TS6 client creates settings.db inside a profile subdirectory
-# (`Default/settings.db` — same layout as the Windows client). On the very
-# first container boot it doesn't exist yet, so we do a short warm-up run
-# to let TS6 write its defaults, then patch, then launch for real.
-TS6_DIR="${TS6_CONFIG_DIR:-/data/ts6-config}"
-# Match either a top-level settings.db or any <profile>/settings.db
-find_settings_db() {
-    local hit
-    hit="$(find "$TS6_DIR" -maxdepth 2 -name settings.db -type f 2>/dev/null | head -n1)"
-    echo "$hit"
-}
+#   VNC_ENABLED       : "1" to turn it on (default off)
+#   VNC_PASSWORD      : required when enabled; clients must auth with it
+#   VNC_PORT          : TCP port inside the container (default 5900)
+#   NOVNC_ENABLED     : "1" to also start a browser-based noVNC proxy
+#   NOVNC_PORT        : HTTP port for noVNC (default 6080)
+#   XVFB_SCREEN       : bumped automatically to 1280x800x24 when VNC is on,
+#                       unless you override it explicitly
+if [ "${VNC_ENABLED:-0}" = "1" ] || [ -n "${VNC_PASSWORD:-}" ]; then
+    if [ -z "${VNC_PASSWORD:-}" ]; then
+        echo "[bootstrap] WARNING: VNC_ENABLED=1 but VNC_PASSWORD is empty."
+        echo "[bootstrap] Refusing to start x11vnc without a password."
+    else
+        VNC_PORT="${VNC_PORT:-5900}"
+        mkdir -p /home/musicbot/.vnc
+        x11vnc -storepasswd "$VNC_PASSWORD" /home/musicbot/.vnc/passwd >/dev/null
+        echo "[bootstrap] Starting x11vnc on :${VNC_PORT} (display :99)..."
+        x11vnc \
+            -display :99 \
+            -rfbport "$VNC_PORT" \
+            -rfbauth /home/musicbot/.vnc/passwd \
+            -forever \
+            -shared \
+            -noxdamage \
+            -quiet \
+            -bg \
+            -o /tmp/x11vnc.log
+        VNC_RUNNING=1
 
-if [ -z "$(find_settings_db)" ]; then
-    echo "[bootstrap] First run — warming up TS6 so it creates settings.db..."
-    /app/scripts/launch_ts6.sh &
-    WARMUP_PID=$!
-    # Wait up to 30s for settings.db to appear
-    for _ in $(seq 1 30); do
-        [ -n "$(find_settings_db)" ] && break
-        sleep 1
-    done
-    # Give the client a few more seconds to actually write audio_settings
-    if [ -n "$(find_settings_db)" ]; then
-        sleep 6
+        if [ "${NOVNC_ENABLED:-0}" = "1" ]; then
+            NOVNC_PORT="${NOVNC_PORT:-6080}"
+            echo "[bootstrap] Starting noVNC on http://0.0.0.0:${NOVNC_PORT}/vnc.html..."
+            websockify --web /usr/share/novnc "$NOVNC_PORT" "localhost:${VNC_PORT}" \
+                >/tmp/novnc.log 2>&1 &
+            NOVNC_PID=$!
+        fi
     fi
-    echo "[bootstrap] Stopping warm-up TS6 instance..."
-    pkill -TERM -f /opt/ts6/TeamSpeak 2>/dev/null || true
-    sleep 2
-    pkill -KILL -f /opt/ts6/TeamSpeak 2>/dev/null || true
-    wait "$WARMUP_PID" 2>/dev/null || true
 fi
-
-SETTINGS_DB="$(find_settings_db)"
-echo "[bootstrap] Patching TS6 audio preprocessor (VAD/AGC/denoise off)..."
-echo "[bootstrap] settings.db: ${SETTINGS_DB:-<not found>}"
-python3 /app/scripts/ts6_patch_audio.py "$TS6_DIR" || \
-    echo "[bootstrap] Warning: TS6 audio patch failed (non-fatal)"
 
 echo "[bootstrap] Launching TS6 client..."
 /app/scripts/launch_ts6.sh &
@@ -95,7 +104,7 @@ TS6_PID=$!
 sleep 8  # allow client to connect and register with WebQuery
 
 # Graceful shutdown on SIGTERM/SIGINT
-trap 'echo "[bootstrap] Shutting down..."; kill $TS6_PID $PULSE_PID $XVFB_PID 2>/dev/null; exit 0' TERM INT
+trap 'echo "[bootstrap] Shutting down..."; kill $TS6_PID $PULSE_PID $XVFB_PID ${NOVNC_PID:-} 2>/dev/null; pkill -f x11vnc 2>/dev/null; exit 0' TERM INT
 
 echo "[bootstrap] Starting Python orchestrator..."
 cd /app

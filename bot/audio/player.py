@@ -203,12 +203,8 @@ class AudioPlayer:
         # Voice Activity Detection always sees energy and doesn't gate music
         # passages as silence. Totally inaudible to humans (below the noise
         # floor of most speakers), but keeps the Opus transmission continuous.
-        #
-        # Disabled by default now that `scripts/ts6_patch_audio.py` turns
-        # VAD/AGC/denoise off directly in the TS6 client, which gives cleaner
-        # audio than injecting any noise. Set AUDIO_ANTI_VAD=1 to re-enable
-        # the hack as a safety net if your TS6 client has VAD on anyway.
-        anti_vad = os.getenv("AUDIO_ANTI_VAD", "0") != "0"
+        # Disable with AUDIO_ANTI_VAD=0 if you want to A/B test.
+        anti_vad = os.getenv("AUDIO_ANTI_VAD", "1") != "0"
         if anti_vad:
             filter_args = [
                 "-filter_complex",

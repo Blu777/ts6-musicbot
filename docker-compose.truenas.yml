@@ -3,39 +3,86 @@
 # Este compose PULLEA la imagen ya construida desde ghcr.io — NO hace build
 # local. Mucho más rápido: primer arranque ~15 s en vez de 2-5 min.
 #
+# TrueNAS Custom App NO soporta archivos .env externos ni expansión de
+# variables ${VAR}. Por eso TODO se define inline acá. Editá los valores
+# marcados con "# CAMBIAR" antes de pegar en la UI.
+#
 # Preparación previa (una sola vez por NAS):
 #   1. En TrueNAS, crea el dataset /mnt/<pool>/apps/teamspeak-music/data
-#      (con permisos para el usuario "apps", UID 568).
+#      con permisos para el usuario "apps" (UID 568).
 #   2. Descarga el cliente TS6 Linux 64-bit desde
 #        https://teamspeak.com/en/downloads/#client
-#      y colócalo como:
+#      y colocalo como:
 #        /mnt/<pool>/apps/teamspeak-music/data/teamspeak-client.tar.gz
 #      (el container lo extrae en el primer arranque).
-#   3. Crea /mnt/<pool>/apps/teamspeak-music/data/.env con las variables que
-#      están en .env.example del repo (TS_SERVER_HOST, TS_QUERY_PASSWORD, etc).
-#   4. Ajusta los paths `/mnt/HMS/...` de abajo a tu pool.
-#   5. Apps → Discover Apps → Custom App → pega este archivo.
+#   3. Ajustá los paths /mnt/HMS/... de abajo a tu pool real.
+#   4. Editá todas las variables marcadas con "# CAMBIAR".
+#   5. Apps → Discover Apps → Custom App → pegá este archivo.
 
 services:
   ts6-musicbot:
     image: ghcr.io/blu777/ts6-musicbot:latest
     container_name: ts6-musicbot
     restart: unless-stopped
-    pull_policy: always   # jala 'latest' en cada deploy; usá un tag fijo (vX.Y.Z) para producción
-
-    env_file: /mnt/HMS/teamspeak-music/data/.env   # ⚠️ ajusta al path real
+    pull_policy: always   # latest en cada deploy; usá un tag fijo (vX.Y.Z) para producción
 
     environment:
+      # ── Infra del contenedor (no tocar salvo que sepas qué hacés) ─────────
       - DISPLAY=:99
-      - PUID=568      # usuario "apps" estándar de TrueNAS SCALE
+      - PUID=568                               # usuario "apps" estándar de TrueNAS SCALE
       - PGID=568
       - AUDIO_CACHE_DIR=/data/cache
       - TS6_CONFIG_DIR=/data/ts6-config
-      - LOG_LEVEL=INFO
-      - AUTO_UPDATE_YT_DLP=1
+      - LOG_LEVEL=INFO                         # DEBUG | INFO | WARNING | ERROR
+      - AUTO_UPDATE_YT_DLP=1                   # 1 = actualiza yt-dlp al arrancar
+
+      # ── Servidor TeamSpeak 6 ──────────────────────────────────────────────
+      - TS_SERVER_HOST=tu-servidor.cl          # CAMBIAR
+      - TS_SERVER_PORT=9988                    # CAMBIAR si no es el default
+      - TS_SERVER_PASSWORD=                    # CAMBIAR si el server tiene password
+      - TS_CHANNEL=NombreDelCanal              # CAMBIAR
+      - TS_BOT_NICKNAME=MusicBot               # CAMBIAR si querés otro nick
+
+      # ── WebQuery HTTP (envío de mensajes de texto del bot) ────────────────
+      # El API key se genera desde la UI admin del servidor TS6.
+      - TS_WEBQUERY_HOST=tu-servidor.cl        # CAMBIAR
+      - TS_WEBQUERY_PORT=10081                 # CAMBIAR si no es el default
+      - TS_WEBQUERY_APIKEY=                    # CAMBIAR
+
+      # ── SSH ServerQuery (recepción de eventos de chat) ────────────────────
+      # Crear con: queryloginadd client_login_name=musicbot
+      # y asignar sgid=2 (Admin Server Query) para b_virtualserver_notify_register.
+      - TS_QUERY_PORT=10012                    # CAMBIAR si no es el default
+      - TS_QUERY_USERNAME=musicbot             # CAMBIAR
+      - TS_QUERY_PASSWORD=                     # CAMBIAR
+
+      # ── Audio ─────────────────────────────────────────────────────────────
+      - AUDIO_VOLUME=85                        # Volumen inicial (0–100)
+      - PULSE_SINK_NAME=musicbot_sink
+      - MAX_PLAYLIST_ITEMS=100
+      # Anti-VAD: mezcla -72 dB de ruido inaudible para que el VAD del cliente
+      # TS6 no corte la música en silencios. Poné "0" si configurás VAD/AGC
+      # a mano por VNC y no querés la inyección.
+      - AUDIO_ANTI_VAD=1
+
+      # ── Remote desktop (VNC) ──────────────────────────────────────────────
+      # Poné VNC_ENABLED=1 y VNC_PASSWORD=<clave-fuerte> cuando quieras abrir
+      # la UI del TS6 para configurarlo a mano. Conectate por SSH tunnel:
+      #   ssh -L 5900:localhost:5900 usuario@truenas
+      # y apuntá tu viewer VNC a localhost:5900.
+      - VNC_ENABLED=0                          # CAMBIAR a 1 cuando lo necesites
+      - VNC_PASSWORD=                          # CAMBIAR (obligatorio si VNC_ENABLED=1)
+      - NOVNC_ENABLED=0                        # 1 = expone http://host:6080/vnc.html
+
+    # VNC ports — bindeados solo a localhost del host TrueNAS por defecto,
+    # accedelos por SSH tunnel. Cambiá "127.0.0.1" por "0.0.0.0" si querés
+    # exponerlos a la LAN (CUIDADO: auth VNC es débil, usá password fuerte).
+    ports:
+      - "127.0.0.1:5900:5900"
+      - "127.0.0.1:6080:6080"
 
     volumes:
-      - /mnt/HMS/teamspeak-music/data:/data   # ⚠️ ajusta al path real
+      - /mnt/HMS/teamspeak-music/data:/data   # CAMBIAR al path real de tu pool
 
     healthcheck:
       test: ["CMD", "python3", "/app/bot/healthcheck.py"]
