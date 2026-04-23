@@ -46,6 +46,40 @@ if ! pactl list short sinks 2>/dev/null | grep -q "^[0-9]*[[:space:]]\+${PULSE_S
 fi
 echo "[bootstrap] PulseAudio socket: ${PULSE_SOCKET} (sink ${PULSE_SINK_NAME} present)"
 
+# ── Disable VAD / AGC / denoise in TS6 client ──────────────────────────────
+# The TS6 desktop client stores its audio preprocessor config inside
+# settings.db (json_blobs.audio_settings). We want raw pass-through of the
+# music stream: no voice-activity gating, no AGC, no denoise.
+#
+# On the very first container boot, settings.db doesn't exist yet — the
+# client creates it once it has initialized. So we do a short warm-up run
+# to let TS6 write its defaults, then patch, then launch for real.
+SETTINGS_DB="${TS6_CONFIG_DIR:-/data/ts6-config}/settings.db"
+
+if [ ! -f "$SETTINGS_DB" ]; then
+    echo "[bootstrap] First run — warming up TS6 so it creates settings.db..."
+    /app/scripts/launch_ts6.sh &
+    WARMUP_PID=$!
+    # Wait up to 30s for settings.db to appear
+    for _ in $(seq 1 30); do
+        [ -f "$SETTINGS_DB" ] && break
+        sleep 1
+    done
+    # Give the client a few more seconds to actually write audio_settings
+    if [ -f "$SETTINGS_DB" ]; then
+        sleep 6
+    fi
+    echo "[bootstrap] Stopping warm-up TS6 instance..."
+    pkill -TERM -f /opt/ts6/TeamSpeak 2>/dev/null || true
+    sleep 2
+    pkill -KILL -f /opt/ts6/TeamSpeak 2>/dev/null || true
+    wait "$WARMUP_PID" 2>/dev/null || true
+fi
+
+echo "[bootstrap] Patching TS6 audio preprocessor (VAD/AGC/denoise off)..."
+python3 /app/scripts/ts6_patch_audio.py "$SETTINGS_DB" || \
+    echo "[bootstrap] Warning: TS6 audio patch failed (non-fatal)"
+
 echo "[bootstrap] Launching TS6 client..."
 /app/scripts/launch_ts6.sh &
 TS6_PID=$!
