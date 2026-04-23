@@ -12,12 +12,15 @@ Idempotent: safe to run on every boot. Exits 0 if `settings.db` or the
 had a chance to initialize).
 
 Usage:
-    ts6_patch_audio.py [path/to/settings.db]
+    ts6_patch_audio.py [path/to/settings.db | path/to/config-dir]
 
-If no path is given, uses `$TS6_CONFIG_DIR/settings.db`
-(default `/data/ts6-config/settings.db`).
+If no argument is given, searches for `settings.db` under
+`$TS6_CONFIG_DIR` (default `/data/ts6-config`), including the `Default/`
+profile subdirectory that the TS6 client creates (same layout as the
+Windows client: `.../TeamSpeak/Default/settings.db`).
 """
 
+import glob
 import json
 import logging
 import os
@@ -141,16 +144,45 @@ def patch(db_path: str) -> int:
         conn.close()
 
 
+def resolve_db_path(arg: str | None) -> str:
+    """Accept either a settings.db file or a config directory (with optional
+    profile subdirs like `Default/`) and return the concrete db path.
+
+    If no match is found, returns the most likely default path anyway so
+    the caller's "file not found" log is descriptive.
+    """
+    if arg and os.path.isfile(arg):
+        return arg
+
+    # If arg points to a directory, use it as the search base; otherwise
+    # fall back to $TS6_CONFIG_DIR (file-path args that don't exist are
+    # treated as "default location unknown — search the env dir").
+    if arg and os.path.isdir(arg):
+        base = arg
+    else:
+        base = os.environ.get("TS6_CONFIG_DIR", "/data/ts6-config")
+    candidates = [
+        os.path.join(base, "settings.db"),
+        os.path.join(base, "Default", "settings.db"),
+    ]
+    # Also scan one level of profile subdirectories (TS6 uses `Default/`
+    # but a user could have several profiles).
+    candidates.extend(sorted(glob.glob(os.path.join(base, "*", "settings.db"))))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    # Nothing found yet — return the classic expected location for a clean
+    # "skipping (first boot?)" log message downstream.
+    return os.path.join(base, "Default", "settings.db")
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="[ts6_patch_audio] %(message)s",
     )
-    if len(sys.argv) > 1:
-        db_path = sys.argv[1]
-    else:
-        config_dir = os.environ.get("TS6_CONFIG_DIR", "/data/ts6-config")
-        db_path = os.path.join(config_dir, "settings.db")
+    arg = sys.argv[1] if len(sys.argv) > 1 else None
+    db_path = resolve_db_path(arg)
     patch(db_path)
     return 0
 

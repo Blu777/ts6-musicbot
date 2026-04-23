@@ -51,22 +51,29 @@ echo "[bootstrap] PulseAudio socket: ${PULSE_SOCKET} (sink ${PULSE_SINK_NAME} pr
 # settings.db (json_blobs.audio_settings). We want raw pass-through of the
 # music stream: no voice-activity gating, no AGC, no denoise.
 #
-# On the very first container boot, settings.db doesn't exist yet — the
-# client creates it once it has initialized. So we do a short warm-up run
+# The TS6 client creates settings.db inside a profile subdirectory
+# (`Default/settings.db` — same layout as the Windows client). On the very
+# first container boot it doesn't exist yet, so we do a short warm-up run
 # to let TS6 write its defaults, then patch, then launch for real.
-SETTINGS_DB="${TS6_CONFIG_DIR:-/data/ts6-config}/settings.db"
+TS6_DIR="${TS6_CONFIG_DIR:-/data/ts6-config}"
+# Match either a top-level settings.db or any <profile>/settings.db
+find_settings_db() {
+    local hit
+    hit="$(find "$TS6_DIR" -maxdepth 2 -name settings.db -type f 2>/dev/null | head -n1)"
+    echo "$hit"
+}
 
-if [ ! -f "$SETTINGS_DB" ]; then
+if [ -z "$(find_settings_db)" ]; then
     echo "[bootstrap] First run — warming up TS6 so it creates settings.db..."
     /app/scripts/launch_ts6.sh &
     WARMUP_PID=$!
     # Wait up to 30s for settings.db to appear
     for _ in $(seq 1 30); do
-        [ -f "$SETTINGS_DB" ] && break
+        [ -n "$(find_settings_db)" ] && break
         sleep 1
     done
     # Give the client a few more seconds to actually write audio_settings
-    if [ -f "$SETTINGS_DB" ]; then
+    if [ -n "$(find_settings_db)" ]; then
         sleep 6
     fi
     echo "[bootstrap] Stopping warm-up TS6 instance..."
@@ -76,8 +83,10 @@ if [ ! -f "$SETTINGS_DB" ]; then
     wait "$WARMUP_PID" 2>/dev/null || true
 fi
 
+SETTINGS_DB="$(find_settings_db)"
 echo "[bootstrap] Patching TS6 audio preprocessor (VAD/AGC/denoise off)..."
-python3 /app/scripts/ts6_patch_audio.py "$SETTINGS_DB" || \
+echo "[bootstrap] settings.db: ${SETTINGS_DB:-<not found>}"
+python3 /app/scripts/ts6_patch_audio.py "$TS6_DIR" || \
     echo "[bootstrap] Warning: TS6 audio patch failed (non-fatal)"
 
 echo "[bootstrap] Launching TS6 client..."
