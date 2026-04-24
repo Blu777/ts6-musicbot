@@ -31,8 +31,8 @@ services:
       - DISPLAY=:99
       - PUID=568                               # usuario "apps" estándar de TrueNAS SCALE
       - PGID=568
-      - AUDIO_CACHE_DIR=/data/cache
       - TS6_CONFIG_DIR=/data/ts6-config
+      # AUDIO_CACHE_DIR se define abajo en la sección Audio (apunta a tmpfs).
       - LOG_LEVEL=INFO                         # DEBUG | INFO | WARNING | ERROR
       - AUTO_UPDATE_YT_DLP=1                   # 1 = actualiza yt-dlp al arrancar
       - CHAT_VERBOSE=0                         # 1 = loggea progreso de descarga al chat
@@ -63,8 +63,11 @@ services:
       - MAX_PLAYLIST_ITEMS=100
       # Anti-VAD: mezcla -72 dB de ruido inaudible para que el VAD del cliente
       # TS6 no corte la música en silencios. Poné "0" si configurás VAD/AGC
-      # a mano por VNC y no querés la inyección.
-      - AUDIO_ANTI_VAD=1
+      # a mano por VNC y no querés la inyección (ahorra ~10-15% CPU de ffmpeg).
+      - AUDIO_ANTI_VAD=0
+      # Cache de yt-dlp en tmpfs (RAM) para evitar stalls de ZFS al descargar.
+      # Con MAX_PLAYLIST_ITEMS=100 * ~5 MB = 500 MB máx, cabe cómodo en RAM.
+      - AUDIO_CACHE_DIR=/tmp/musicbot_cache
 
       # ── Remote desktop (VNC) ──────────────────────────────────────────────
       # Poné VNC_ENABLED=1 y VNC_PASSWORD=<clave-fuerte> cuando quieras abrir
@@ -85,6 +88,12 @@ services:
     volumes:
       - /mnt/HMS/teamspeak-music/data:/data   # CAMBIAR al path real de tu pool
 
+    # /tmp en RAM (tmpfs) — crítico para que AUDIO_CACHE_DIR no caiga en ZFS
+    # y evite stalls del pool que disparaban el watchdog iTCO del host.
+    # 1 GB cubre MAX_PLAYLIST_ITEMS=100 * ~5 MB con margen.
+    tmpfs:
+      - /tmp:rw,size=1g,mode=1777
+
     healthcheck:
       test: ["CMD", "python3", "/app/bot/healthcheck.py"]
       interval: 30s
@@ -92,10 +101,15 @@ services:
       retries: 3
       start_period: 60s
 
+    # Hardening: prevenir que el container tire el host bajo carga extrema.
+    # pids_limit evita fork-bombs. oom_score_adj hace que el OOM-killer mate
+    # primero este container antes de tocar procesos del host (ZFS, docker).
+    pids_limit: 500
+    oom_score_adj: 500
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 1G
+          cpus: "1.5"                 # dejá margen al host para ZFS/middlewared
+          memory: 768M                # más estricto que 1G
         reservations:
           memory: 256M
