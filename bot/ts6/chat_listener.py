@@ -22,25 +22,32 @@ log = logging.getLogger(__name__)
 
 # ── TS3/TS6 ServerQuery escape decoding ───────────────────────────────────────
 # Ref: https://yat.qa/ressourcen/escape-sequences/
-_TS_UNESCAPE = [
-    (r"\\", "\\"),  # must come first to avoid double-unescape
-    (r"\/", "/"),
-    (r"\s", " "),
-    (r"\p", "|"),
-    (r"\a", "\x07"),
-    (r"\b", "\b"),
-    (r"\f", "\f"),
-    (r"\n", "\n"),
-    (r"\r", "\r"),
-    (r"\t", "\t"),
-    (r"\v", "\v"),
-]
+_TS_ESCAPE_MAP: dict[str, str] = {
+    "\\": "\\",
+    "/": "/",
+    "s": " ",
+    "p": "|",
+    "a": "\x07",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+}
 
 
 def _ts_decode(s: str) -> str:
-    for k, v in _TS_UNESCAPE:
-        s = s.replace(k, v)
-    return s
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s) and s[i + 1] in _TS_ESCAPE_MAP:
+            out.append(_TS_ESCAPE_MAP[s[i + 1]])
+            i += 2
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
 
 
 def _tokenize(line: str) -> dict:

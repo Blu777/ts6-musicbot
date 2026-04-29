@@ -229,3 +229,30 @@ async def test_handler_exception_sends_error_message(setup):
     # At least one error message should be sent to the channel
     sent = [c.args[0] for c in ts.send_channel_message.await_args_list]
     assert any("Error" in s or "kaboom" in s for s in sent)
+
+
+# ── Bug reproduction: _cmd_netstats attribute access ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_netstats_without_transport_shows_unavailable(setup):
+    """!netstats must not raise AttributeError when transport is None."""
+    parser, player, ts = setup
+    listener = MagicMock()
+    listener._transport = None
+    parser.listener = listener
+    await parser.handle("alice", "!netstats")
+    sent = [c.args[0] for c in ts.send_channel_message.await_args_list]
+    assert any("no disponible" in s.lower() for s in sent), sent
+
+
+@pytest.mark.asyncio
+async def test_netstats_with_raw_transport_shows_unavailable(setup):
+    """!netstats must gracefully report when SSH transport is not in use."""
+    parser, player, ts = setup
+    listener = MagicMock()
+    transport = MagicMock(spec=[])  # no _session / _chan attrs
+    listener._transport = transport
+    parser.listener = listener
+    await parser.handle("alice", "!netstats")
+    sent = [c.args[0] for c in ts.send_channel_message.await_args_list]
+    assert any("no disponible" in s.lower() for s in sent), sent

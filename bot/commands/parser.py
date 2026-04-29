@@ -229,13 +229,19 @@ class CommandParser:
             await self.ts.send_channel_message(f"Canal no encontrado: {args}")
 
     async def _cmd_netstats(self, sender: str, _: str) -> None:
-        if not self.listener or not self.listener._session or not self.listener._chan:
+        transport = getattr(self.listener, "_transport", None)
+        if not self.listener or not transport:
             await self.ts.send_channel_message("Stats no disponibles.")
+            return
+        ssh_chan = getattr(transport, "_chan", None)
+        ssh_session = getattr(transport, "_session", None)
+        if not ssh_session or not ssh_chan:
+            await self.ts.send_channel_message("Stats no disponibles (requiere SSH transport).")
             return
         try:
             ts_clid = await self.ts.get_own_client_id()
-            resp = await self.listener._session.cmd(
-                self.listener._chan, f"clientinfo clid={ts_clid}"
+            resp = await ssh_session.cmd(
+                ssh_chan, f"clientinfo clid={ts_clid}"
             )
             fields = {}
             for token in resp.split():
